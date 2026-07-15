@@ -84,6 +84,7 @@ class SoccerEnv(gym.Env):
         self.last_touched_ball = False
         self.last_terminated = False
 
+
     def get_obs(self):
         return np.array([
             self.agent_pos.x,
@@ -99,12 +100,22 @@ class SoccerEnv(gym.Env):
             self.goal_width,
         ], dtype=np.float32)
     
+    def get_random_position(self):
+        x_ = self.np_random.uniform(X_MIN + 1, X_MAX - 1)
+        y_ = self.np_random.uniform(Y_MIN + GOAL_DEPTH, Y_MAX - 1.0)
+        return Vector2(x=x_, y=y_)
+    def get_random_position_away_from(self, another_position, min_distance=TOUCH_DISTANCE):
+        random_pos = self.get_random_position()       
+        while distance(another_position, random_pos) < min_distance:
+            random_pos = self.get_random_position()       
+        return random_pos
+ 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        self.agent_pos = Vector2(x=5, y=5)
+        self.agent_pos = self.get_random_position()
         self.agent_speed = Vector2(x=1, y=1)
-        self.ball_pos = Vector2(x=3, y=3)
+        self.ball_pos = self.get_random_position_away_from(self.agent_pos)
         self.ball_speed = Vector2(x=0, y=0)
         self.goal_pos = Vector2(x=10, y=0)
         self.goal_width = 5

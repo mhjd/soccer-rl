@@ -10,7 +10,7 @@ model = PPO(
     verbose=1
 )
 
-model.learn(total_timesteps=50_500)
+model.learn(total_timesteps=100_000)
 
 Path("models").mkdir(exist_ok=True)
 model.save("models/ppo_soccer")
