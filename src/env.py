@@ -109,16 +109,23 @@ class SoccerEnv(gym.Env):
         while distance(another_position, random_pos) < min_distance:
             random_pos = self.get_random_position()       
         return random_pos
+
+    def get_random_goal(self):
+        goal_width = self.np_random.uniform(GOAL_MIN_WIDTH, GOAL_MAX_WIDTH)
+        goal_x = self.np_random.uniform(
+            X_MIN + goal_width / 2,
+            X_MAX - goal_width / 2,
+        )
+        return Vector2(x=goal_x, y=Y_MIN), goal_width
  
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
+        self.goal_pos, self.goal_width = self.get_random_goal()
         self.agent_pos = self.get_random_position()
         self.agent_speed = Vector2(x=1, y=1)
         self.ball_pos = self.get_random_position_away_from(self.agent_pos)
         self.ball_speed = Vector2(x=0, y=0)
-        self.goal_pos = Vector2(x=10, y=0)
-        self.goal_width = 5
 
         observation = self.get_obs()
 
