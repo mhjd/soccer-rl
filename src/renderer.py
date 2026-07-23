@@ -2,12 +2,14 @@ import numpy as np
 
 
 class SoccerRenderer:
-    def __init__(self, x_min, y_min, x_max, y_max, touch_distance, render_fps):
+    def __init__(self, x_min, y_min, x_max, y_max, agent_radius, ball_radius, render_fps):
         self.x_min = x_min
         self.y_min = y_min
         self.x_max = x_max
         self.y_max = y_max
-        self.touch_distance = touch_distance
+        self.agent_radius = agent_radius
+        self.ball_radius = ball_radius
+        self.collision_distance = agent_radius + ball_radius
         self.render_fps = render_fps
         self.figure = None
         self.axes = None
@@ -59,7 +61,7 @@ class SoccerRenderer:
         axes.add_patch(
             plt.Circle(
                 (ball_pos.x, ball_pos.y),
-                self.touch_distance,
+                self.collision_distance,
                 fill=False,
                 edgecolor="gray",
                 linestyle="--",
@@ -69,14 +71,14 @@ class SoccerRenderer:
         axes.add_patch(
             plt.Circle(
                 (agent_pos.x, agent_pos.y),
-                0.35,
+                self.agent_radius,
                 color="royalblue",
             )
         )
         axes.add_patch(
             plt.Circle(
                 (ball_pos.x, ball_pos.y),
-                0.2,
+                self.ball_radius,
                 color="darkorange",
             )
         )
