@@ -2,7 +2,7 @@ from pathlib import Path
 
 from stable_baselines3 import PPO
 
-from src.env import SoccerEnv
+from src.soccer_2d.env import SoccerEnv
 
 fixed_goal_env = SoccerEnv(render_mode=None, randomize_goal=False)
 model = PPO(

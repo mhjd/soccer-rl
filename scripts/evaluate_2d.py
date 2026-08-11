@@ -1,5 +1,5 @@
 from stable_baselines3 import PPO
-from src.env import SoccerEnv
+from src.soccer_2d.env import SoccerEnv
 
 NUM_EPISODES = 100
 

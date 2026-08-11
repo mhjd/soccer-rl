@@ -12,7 +12,7 @@ install:
 	$(PYTHON) -m pip install -r requirements.txt
 
 train:
-	$(PYTHON) -m scripts.train
+	$(PYTHON) -m scripts.train_2d
 
 evaluate:
-	$(PYTHON) -m scripts.evaluate
+	$(PYTHON) -m scripts.evaluate_2d

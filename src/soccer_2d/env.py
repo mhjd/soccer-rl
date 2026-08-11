@@ -3,7 +3,7 @@ from gymnasium import spaces
 import numpy as np
 import math
 from dataclasses import dataclass
-from src.renderer import SoccerRenderer
+from src.soccer_2d.renderer import SoccerRenderer
 
 X_MIN = 0
 Y_MIN = 0
