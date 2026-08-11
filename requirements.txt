@@ -1,4 +1,5 @@
 gymnasium
 matplotlib
+mujoco
 numpy
 stable-baselines3
