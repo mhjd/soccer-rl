@@ -3,7 +3,7 @@ from pathlib import Path
 
 from stable_baselines3 import PPO
 
-from src.soccer_3d import CylinderSoccerEnv
+from src.soccer_3d import AdaptiveStartCurriculum, CylinderSoccerEnv
 
 
 DEFAULT_MODEL_PATH = Path("models/ppo_3d_cylinder_fixed.zip")
@@ -12,6 +12,7 @@ REWARD_STRATEGIES = (
     "contact_phased",
     "approach_warmup",
     "ball_goal_only",
+    "goal_only",
 )
 
 
@@ -31,6 +32,10 @@ def parse_args():
         action="store_true",
     )
     parser.add_argument(
+        "--adaptive-curriculum",
+        action="store_true",
+    )
+    parser.add_argument(
         "--rollout-steps",
         type=int,
         default=2048,
@@ -43,7 +48,11 @@ def parse_args():
         parser.error("--timesteps must be positive")
     if args.rollout_steps <= 1:
         parser.error("--rollout-steps must be greater than 1")
-
+    if args.adaptive_curriculum and args.randomize_initial_positions:
+        parser.error(
+            "--adaptive-curriculum and --randomize-initial-positions "
+            "cannot be combined"
+        )
     return args
 
 
@@ -54,12 +63,18 @@ def train(
     output_path,
     reward_strategy,
     randomize_initial_positions,
+    adaptive_curriculum,
 ):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    env = CylinderSoccerEnv(
+    base_env = CylinderSoccerEnv(
         render_mode=None,
         reward_strategy=reward_strategy,
         randomize_initial_positions=randomize_initial_positions,
+    )
+    env = (
+        AdaptiveStartCurriculum(base_env)
+        if adaptive_curriculum
+        else base_env
     )
 
     try:
@@ -72,17 +87,28 @@ def train(
         )
         model.learn(total_timesteps=timesteps)
         model.save(output_path)
+        if adaptive_curriculum:
+            print(
+                "Curriculum finished at difficulty "
+                f"{env.difficulty:.3f} after {env.completed_episodes} "
+                f"episodes ({env.success_rate:.1%} total success)."
+            )
     finally:
         env.close()
 
 
 def main():
     args = parse_args()
+    if args.adaptive_curriculum:
+        initial_position_mode = "adaptive-curriculum"
+    elif args.randomize_initial_positions:
+        initial_position_mode = "randomized"
+    else:
+        initial_position_mode = "fixed"
     print(
         f"Training fixed-goal PPO for {args.timesteps} timesteps "
-        f"with seed {args.seed}, {args.reward_strategy} shaping, and "
-        f"{'randomized' if args.randomize_initial_positions else 'fixed'} "
-        "initial positions."
+        f"with seed {args.seed}, {args.reward_strategy} reward, and "
+        f"{initial_position_mode} initial positions."
     )
     train(
         timesteps=args.timesteps,
@@ -91,6 +117,7 @@ def main():
         output_path=args.output,
         reward_strategy=args.reward_strategy,
         randomize_initial_positions=args.randomize_initial_positions,
+        adaptive_curriculum=args.adaptive_curriculum,
     )
     print(f"Saved model to {args.output}")
 

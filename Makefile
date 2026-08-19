@@ -11,7 +11,15 @@ SEED ?= 0
 	train-cylinder-phased-randomized \
 	evaluate-cylinder-phased-randomized \
 	train-cylinder-approach-warmup-randomized \
-	evaluate-cylinder-approach-warmup-randomized
+	evaluate-cylinder-approach-warmup-randomized \
+	train-cylinder-adaptive-curriculum \
+	evaluate-cylinder-adaptive-curriculum \
+	train-cylinder-curriculum-phased \
+	evaluate-cylinder-curriculum-phased \
+	measure-cylinder-adaptive-curve \
+	measure-cylinder-phased-curve \
+	measure-cylinder-curriculum-phased-curve \
+	plot-cylinder-learning-curves
 
 help:
 	@echo "Available targets:"
@@ -28,6 +36,14 @@ help:
 	@echo "  make evaluate-cylinder-phased-randomized   Render phased on a random start"
 	@echo "  make train-cylinder-approach-warmup-randomized    Train light approach warmup"
 	@echo "  make evaluate-cylinder-approach-warmup-randomized Render its learned policy"
+	@echo "  make train-cylinder-adaptive-curriculum          Train sparse reward with adaptive starts"
+	@echo "  make evaluate-cylinder-adaptive-curriculum       Render it on the full start distribution"
+	@echo "  make train-cylinder-curriculum-phased            Train adaptive starts with phased shaping"
+	@echo "  make evaluate-cylinder-curriculum-phased         Render the combined policy"
+	@echo "  make measure-cylinder-adaptive-curve             Measure adaptive learning for one seed"
+	@echo "  make measure-cylinder-phased-curve               Measure phased learning for one seed"
+	@echo "  make measure-cylinder-curriculum-phased-curve    Measure curriculum plus phased shaping"
+	@echo "  make plot-cylinder-learning-curves               Plot all measured seeds"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -113,3 +129,53 @@ evaluate-cylinder-approach-warmup-randomized:
 		--randomize-initial-positions \
 		--episodes 1 \
 		--render
+
+train-cylinder-adaptive-curriculum:
+	$(PYTHON) -m scripts.train_3d_cylinder \
+		--seed $(SEED) \
+		--reward-strategy goal_only \
+		--adaptive-curriculum \
+		--output models/ppo_3d_cylinder_adaptive_curriculum.zip
+
+evaluate-cylinder-adaptive-curriculum:
+	$(MJ_PYTHON) -m scripts.evaluate_3d_cylinder \
+		--model models/ppo_3d_cylinder_adaptive_curriculum.zip \
+		--seed $(SEED) \
+		--reward-strategy goal_only \
+		--randomize-initial-positions \
+		--episodes 1 \
+		--render
+
+train-cylinder-curriculum-phased:
+	$(PYTHON) -m scripts.train_3d_cylinder \
+		--seed $(SEED) \
+		--reward-strategy contact_phased \
+		--adaptive-curriculum \
+		--output models/ppo_3d_cylinder_curriculum_contact_phased.zip
+
+evaluate-cylinder-curriculum-phased:
+	$(MJ_PYTHON) -m scripts.evaluate_3d_cylinder \
+		--model models/ppo_3d_cylinder_curriculum_contact_phased.zip \
+		--seed $(SEED) \
+		--reward-strategy goal_only \
+		--randomize-initial-positions \
+		--episodes 1 \
+		--render
+
+measure-cylinder-adaptive-curve:
+	$(PYTHON) -m scripts.measure_3d_learning_curve \
+		--strategy adaptive_curriculum \
+		--seed $(SEED)
+
+measure-cylinder-phased-curve:
+	$(PYTHON) -m scripts.measure_3d_learning_curve \
+		--strategy contact_phased \
+		--seed $(SEED)
+
+measure-cylinder-curriculum-phased-curve:
+	$(PYTHON) -m scripts.measure_3d_learning_curve \
+		--strategy curriculum_contact_phased \
+		--seed $(SEED)
+
+plot-cylinder-learning-curves:
+	$(PYTHON) -m scripts.plot_3d_learning_curves

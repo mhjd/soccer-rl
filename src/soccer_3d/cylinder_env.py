@@ -26,6 +26,7 @@ REWARD_STRATEGIES = {
     "contact_phased",
     "approach_warmup",
     "ball_goal_only",
+    "goal_only",
 }
 RANDOM_INITIAL_XY_LOW = np.array([-1.5, -0.5])
 RANDOM_INITIAL_XY_HIGH = np.array([1.5, 1.0])
@@ -245,6 +246,25 @@ class CylinderSoccerEnv(gym.Env):
                 return agent_xy, ball_xy
         raise RuntimeError("Could not sample valid initial positions")
 
+    def _set_initial_xy_positions(self, agent_xy, ball_xy):
+        agent_xy = np.asarray(agent_xy, dtype=np.float64)
+        ball_xy = np.asarray(ball_xy, dtype=np.float64)
+        if agent_xy.shape != (2,) or ball_xy.shape != (2,):
+            raise ValueError("Initial XY positions must each have shape (2,)")
+        if not np.all(np.isfinite(np.concatenate([agent_xy, ball_xy]))):
+            raise ValueError("Initial XY positions must be finite")
+
+        minimum_separation = (
+            self._agent_radius + self._ball_radius + INITIAL_CLEARANCE
+        )
+        if np.linalg.norm(agent_xy - ball_xy) < minimum_separation:
+            raise ValueError("Initial agent and ball positions are too close")
+
+        self.data.qpos[self._agent_qpos_addresses] = agent_xy
+        self.data.qpos[
+            self._ball_qpos_address : self._ball_qpos_address + 2
+        ] = ball_xy
+
     def _agent_ball_reward_weight(self):
         if self.reward_strategy == "combined":
             return AGENT_BALL_PROGRESS_WEIGHT
@@ -264,15 +284,16 @@ class CylinderSoccerEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        del options
+        options = {} if options is None else options
 
         mujoco.mj_resetData(self.model, self.data)
-        if self.randomize_initial_positions:
+        initial_xy_positions = options.get("initial_xy_positions")
+        if initial_xy_positions is not None:
+            agent_xy, ball_xy = initial_xy_positions
+            self._set_initial_xy_positions(agent_xy, ball_xy)
+        elif self.randomize_initial_positions:
             agent_xy, ball_xy = self._sample_initial_xy_positions()
-            self.data.qpos[self._agent_qpos_addresses] = agent_xy
-            self.data.qpos[
-                self._ball_qpos_address : self._ball_qpos_address + 2
-            ] = ball_xy
+            self._set_initial_xy_positions(agent_xy, ball_xy)
         mujoco.mj_forward(self.model, self.data)
         self._elapsed_steps = 0
         self._ball_contact_occurred = False
@@ -313,7 +334,11 @@ class CylinderSoccerEnv(gym.Env):
             ball_goal_distance_before - ball_goal_distance_after
         )
         agent_ball_reward = agent_ball_reward_weight * agent_ball_progress
-        ball_goal_reward = BALL_GOAL_PROGRESS_WEIGHT * ball_goal_progress
+        ball_goal_reward = (
+            0.0
+            if self.reward_strategy == "goal_only"
+            else BALL_GOAL_PROGRESS_WEIGHT * ball_goal_progress
+        )
         shaping_reward = agent_ball_reward + ball_goal_reward
         goal_reward = GOAL_REWARD if terminated else 0.0
         reward = goal_reward + shaping_reward

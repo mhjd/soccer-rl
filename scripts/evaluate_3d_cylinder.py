@@ -11,6 +11,7 @@ REWARD_STRATEGIES = (
     "contact_phased",
     "approach_warmup",
     "ball_goal_only",
+    "goal_only",
 )
 
 
@@ -71,6 +72,7 @@ def evaluate(
     episode_rewards = []
     episode_shaping_returns = []
     episode_lengths = []
+    successful_episode_lengths = []
     goals = 0
 
     try:
@@ -101,6 +103,8 @@ def evaluate(
             episode_rewards.append(episode_reward)
             episode_shaping_returns.append(episode_shaping_return)
             episode_lengths.append(episode_length)
+            if info["goal"]:
+                successful_episode_lengths.append(episode_length)
             goals += int(info["goal"])
     finally:
         env.close()
@@ -111,6 +115,11 @@ def evaluate(
         "mean_reward": float(np.mean(episode_rewards)),
         "mean_shaping_return": float(np.mean(episode_shaping_returns)),
         "mean_episode_length": float(np.mean(episode_lengths)),
+        "mean_steps_to_goal": (
+            float(np.mean(successful_episode_lengths))
+            if successful_episode_lengths
+            else float("nan")
+        ),
         "reward_std": float(np.std(episode_rewards)),
         "episode_length_std": float(np.std(episode_lengths)),
     }
@@ -144,6 +153,7 @@ def main():
     )
     print(f"Reward std: {results['reward_std']:.3f}")
     print(f"Mean episode length: {results['mean_episode_length']:.1f}")
+    print(f"Mean steps to goal: {results['mean_steps_to_goal']:.1f}")
     print(f"Episode length std: {results['episode_length_std']:.1f}")
 
 
