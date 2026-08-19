@@ -1,0 +1,8 @@
+.DS_Store
+*.md
+.agents/
+__pycache__/
+*.py[cod]
+models/
+note_perso.org
+scripts/$

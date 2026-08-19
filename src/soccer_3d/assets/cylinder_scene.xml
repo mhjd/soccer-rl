@@ -1,0 +1,128 @@
+<mujoco model="soccer_3d_cylinder">
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <worldbody>
+    <camera
+      name="overview"
+      pos="0 0 7"
+      xyaxes="1 0 0 0 1 0"
+      fovy="45"
+    />
+
+    <geom
+      name="ground"
+      type="plane"
+      size="5 3 0.1"
+      rgba="0.2 0.5 0.2 1"
+    />
+
+    <geom
+      name="wall_left"
+      type="box"
+      pos="-4.1 0 0.2"
+      size="0.1 2.1 0.2"
+      rgba="0.7 0.7 0.7 1"
+    />
+    <geom
+      name="wall_right"
+      type="box"
+      pos="4.1 0 0.2"
+      size="0.1 2.1 0.2"
+      rgba="0.7 0.7 0.7 1"
+    />
+    <geom
+      name="wall_bottom_left"
+      type="box"
+      pos="-2.55 -2.1 0.2"
+      size="1.55 0.1 0.2"
+      rgba="0.7 0.7 0.7 1"
+    />
+    <geom
+      name="wall_bottom_right"
+      type="box"
+      pos="2.55 -2.1 0.2"
+      size="1.55 0.1 0.2"
+      rgba="0.7 0.7 0.7 1"
+    />
+    <geom
+      name="wall_top"
+      type="box"
+      pos="0 2.1 0.2"
+      size="4.1 0.1 0.2"
+      rgba="0.7 0.7 0.7 1"
+    />
+
+    <geom
+      name="goal_left_side"
+      type="box"
+      pos="-1.1 -2.3 0.4"
+      size="0.1 0.3 0.4"
+      rgba="0.9 0.9 0.9 1"
+    />
+    <geom
+      name="goal_right_side"
+      type="box"
+      pos="1.1 -2.3 0.4"
+      size="0.1 0.3 0.4"
+      rgba="0.9 0.9 0.9 1"
+    />
+    <geom
+      name="goal_back"
+      type="box"
+      pos="0 -2.7 0.4"
+      size="1.2 0.1 0.4"
+      rgba="0.9 0.9 0.9 1"
+    />
+    <geom
+      name="goal_crossbar"
+      type="box"
+      pos="0 -2.1 0.85"
+      size="1.2 0.1 0.05"
+      rgba="0.9 0.9 0.9 1"
+    />
+
+    <body name="agent" pos="0 0 0.25">
+      <joint name="agent_x" type="slide" axis="1 0 0"/>
+      <joint name="agent_y" type="slide" axis="0 1 0"/>
+      <geom
+        name="agent_geom"
+        type="cylinder"
+        size="0.25 0.25"
+        mass="20"
+        rgba="0.2 0.4 0.8 1"
+      />
+    </body>
+
+    <body name="ball" pos="1 0 0.11">
+      <freejoint name="ball_free"/>
+      <geom
+        name="ball_geom"
+        type="sphere"
+        size="0.11"
+        mass="0.43"
+        rgba="0.9 0.9 0.9 1"
+      />
+    </body>
+  </worldbody>
+
+  <actuator>
+    <velocity
+      name="agent_x_velocity"
+      joint="agent_x"
+      kv="100"
+      ctrllimited="true"
+      ctrlrange="-4 4"
+      forcelimited="true"
+      forcerange="-200 200"
+    />
+    <velocity
+      name="agent_y_velocity"
+      joint="agent_y"
+      kv="100"
+      ctrllimited="true"
+      ctrlrange="-4 4"
+      forcelimited="true"
+      forcerange="-200 200"
+    />
+  </actuator>
+</mujoco>
