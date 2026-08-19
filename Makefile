@@ -103,11 +103,11 @@ train-cylinder-approach-warmup-randomized:
 		--seed $(SEED) \
 		--reward-strategy approach_warmup \
 		--randomize-initial-positions \
-		--output models/ppo_3d_cylinder_approach_warmup_randomized.zip
+		--output models/ppo_3d_cylinder_approach_warmup_80k_0p1_randomized.zip
 
 evaluate-cylinder-approach-warmup-randomized:
 	$(MJ_PYTHON) -m scripts.evaluate_3d_cylinder \
-		--model models/ppo_3d_cylinder_approach_warmup_randomized.zip \
+		--model models/ppo_3d_cylinder_approach_warmup_80k_0p1_randomized.zip \
 		--seed $(SEED) \
 		--reward-strategy ball_goal_only \
 		--randomize-initial-positions \
