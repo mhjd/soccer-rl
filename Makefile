@@ -54,9 +54,9 @@ train:
 evaluate:
 	$(PYTHON) -m scripts.evaluate_2d
 
-train-cylinder: train-cylinder-combined
+train-cylinder: train-cylinder-adaptive-curriculum
 
-evaluate-cylinder: evaluate-cylinder-combined
+evaluate-cylinder: evaluate-cylinder-adaptive-curriculum
 
 train-cylinder-combined:
 	$(PYTHON) -m scripts.train_3d_cylinder \
