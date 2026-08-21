@@ -1,0 +1,6 @@
+Source: https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1
+Revision: da76818e269b82289eba39808e2fb91d679d6994
+Retrieved: 2026-08-20
+
+This directory vendors g1.xml and only the mesh files referenced by that
+model. The upstream BSD-3-Clause license is preserved in LICENSE.

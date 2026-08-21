@@ -1,0 +1,12 @@
+The optional G1 velocity policy is downloaded from Unitree RL Lab:
+
+Repository: https://github.com/unitreerobotics/unitree_rl_lab
+Revision: 4960b84732b0c2ec593dccbfe963fda1bcd7b1e3
+Path: deploy/robots/g1_29dof/config/policy/velocity/v0/exported/policy.onnx
+SHA-256: 610c27e463a8f666aa50a06346678c00b4df3859f10b54bcc1f817c28251406f
+License: Apache-2.0
+
+The policy binary is downloaded into the ignored models/ directory. Its
+deployment constants come from the adjacent upstream deploy.yaml at the same
+revision. This project runs that contract against the separately licensed
+MuJoCo Menagerie G1 model already vendored in this directory.

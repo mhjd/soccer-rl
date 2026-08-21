@@ -1,6 +1,8 @@
 .DS_Store
 *.md
 .agents/
+.venv*/
+:memory:.ses
 __pycache__/
 *.py[cod]
 models/

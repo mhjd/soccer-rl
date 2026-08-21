@@ -1,5 +1,8 @@
 PYTHON := .venv/bin/python
 MJ_PYTHON := .venv/bin/mjpython
+LOCOMOTION_PYTHON := .venv-locomotion/bin/python
+LOCOMOTION_MJ_PYTHON := .venv-locomotion/bin/mjpython
+LOCOMOTION_UV_CACHE ?= /tmp/soccer-rl-uv-cache
 SEED ?= 0
 
 .PHONY: help install train evaluate \
@@ -19,7 +22,10 @@ SEED ?= 0
 	measure-cylinder-adaptive-curve \
 	measure-cylinder-phased-curve \
 	measure-cylinder-curriculum-phased-curve \
-	plot-cylinder-learning-curves
+	plot-cylinder-learning-curves \
+	check-g1 inspect-g1 \
+	setup-g1-locomotion download-g1-locomotion-policy \
+	check-g1-locomotion inspect-g1-locomotion
 
 help:
 	@echo "Available targets:"
@@ -44,6 +50,12 @@ help:
 	@echo "  make measure-cylinder-phased-curve               Measure phased learning for one seed"
 	@echo "  make measure-cylinder-curriculum-phased-curve    Measure curriculum plus phased shaping"
 	@echo "  make plot-cylinder-learning-curves               Plot all measured seeds"
+	@echo "  make check-g1                                    Run the headless G1 smoke simulation"
+	@echo "  make inspect-g1                                  Render the isolated G1 model"
+	@echo "  make setup-g1-locomotion                         Install isolated locomotion dependencies"
+	@echo "  make download-g1-locomotion-policy               Download and verify the official policy"
+	@echo "  make check-g1-locomotion                         Check stand, forward, lateral, and yaw commands"
+	@echo "  make inspect-g1-locomotion                       Render one forward-command rollout"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -179,3 +191,27 @@ measure-cylinder-curriculum-phased-curve:
 
 plot-cylinder-learning-curves:
 	$(PYTHON) -m scripts.plot_3d_learning_curves
+
+check-g1:
+	$(PYTHON) -m scripts.inspect_3d_g1
+
+inspect-g1:
+	$(MJ_PYTHON) -m scripts.inspect_3d_g1 --duration 10 --render
+
+setup-g1-locomotion:
+	UV_CACHE_DIR=$(LOCOMOTION_UV_CACHE) uv venv .venv-locomotion --python 3.11
+	UV_CACHE_DIR=$(LOCOMOTION_UV_CACHE) uv pip install \
+		--python $(LOCOMOTION_PYTHON) \
+		-r requirements-locomotion.txt
+
+download-g1-locomotion-policy:
+	$(PYTHON) -m scripts.download_g1_locomotion_policy
+
+check-g1-locomotion:
+	$(LOCOMOTION_PYTHON) -m scripts.evaluate_3d_g1_locomotion --suite
+
+inspect-g1-locomotion:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_locomotion \
+		--vx 0.5 \
+		--duration 10 \
+		--render
