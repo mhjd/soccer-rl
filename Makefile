@@ -27,7 +27,8 @@ SEED ?= 0
 	setup-g1-locomotion download-g1-locomotion-policy \
 	check-g1-locomotion inspect-g1-locomotion \
 	check-g1-soccer inspect-g1-soccer \
-	check-g1-soccer-env inspect-g1-soccer-env
+	check-g1-soccer-env inspect-g1-soccer-env \
+	train-g1-soccer-policy evaluate-g1-soccer-policy
 
 help:
 	@echo "Available targets:"
@@ -62,6 +63,8 @@ help:
 	@echo "  make inspect-g1-soccer                           Render the scripted G1 soccer rollout"
 	@echo "  make check-g1-soccer-env                         Check the Gymnasium G1 soccer environment"
 	@echo "  make inspect-g1-soccer-env                       Render an environment rollout"
+	@echo "  make train-g1-soccer-policy                      Train the high-level G1 soccer policy"
+	@echo "  make evaluate-g1-soccer-policy                   Render the learned high-level policy"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -233,3 +236,12 @@ check-g1-soccer-env:
 
 inspect-g1-soccer-env:
 	$(LOCOMOTION_MJ_PYTHON) -m scripts.check_3d_g1_soccer_env --render
+
+train-g1-soccer-policy:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED)
+
+evaluate-g1-soccer-policy:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
+		--seed $(SEED) \
+		--render
