@@ -31,6 +31,12 @@ MINIMUM_PELVIS_HEIGHT = 0.45
 MINIMUM_UPRIGHT_ALIGNMENT = 0.5
 RENDER_HEIGHT = 400
 RENDER_WIDTH = 640
+FIXED_G1_XY = np.array([0.0, 0.0], dtype=np.float64)
+FIXED_BALL_XY = np.array([1.0, 0.0], dtype=np.float64)
+RANDOM_BALL_XY_LOW = np.array([0.8, -0.7], dtype=np.float64)
+RANDOM_BALL_XY_HIGH = np.array([1.6, 0.7], dtype=np.float64)
+RANDOM_BEHIND_DISTANCE = (0.8, 1.4)
+RANDOM_LATERAL_OFFSET = (-0.6, 0.6)
 
 
 def normalized_action_to_command(action: np.ndarray) -> np.ndarray:
@@ -53,7 +59,7 @@ def normalized_action_to_command(action: np.ndarray) -> np.ndarray:
 
 
 class G1SoccerEnv(gym.Env):
-    """Fixed-start soccer task controlled through a G1 locomotion policy.
+    """Soccer task controlled through a G1 locomotion policy.
 
     Action order: forward velocity, lateral velocity, and yaw rate.
 
@@ -72,6 +78,7 @@ class G1SoccerEnv(gym.Env):
         policy_path: Path = DEFAULT_POLICY_PATH,
         max_episode_steps: int = MAX_EPISODE_STEPS,
         render_mode: str | None = None,
+        randomize_initial_positions: bool = False,
     ):
         super().__init__()
         if max_episode_steps <= 0:
@@ -91,6 +98,7 @@ class G1SoccerEnv(gym.Env):
         self.controller = G1LocomotionController(self.model, policy_path)
         self.max_episode_steps = max_episode_steps
         self.render_mode = render_mode
+        self.randomize_initial_positions = randomize_initial_positions
 
         high_level_ratio = CONTROL_TIMESTEP / self.model.opt.timestep
         self.physics_steps_per_action = round(high_level_ratio)
@@ -125,6 +133,14 @@ class G1SoccerEnv(gym.Env):
             mujoco.mjtObj.mjOBJ_BODY,
             "ball",
         )
+        self._g1_freejoint_id = self._name_id(
+            mujoco.mjtObj.mjOBJ_JOINT,
+            "floating_base_joint",
+        )
+        self._ball_freejoint_id = self._name_id(
+            mujoco.mjtObj.mjOBJ_JOINT,
+            "ball_free",
+        )
         self._ball_geom_id = self._name_id(
             mujoco.mjtObj.mjOBJ_GEOM,
             "ball_geom",
@@ -152,6 +168,12 @@ class G1SoccerEnv(gym.Env):
             ),
         }
         self._ball_radius = self.model.geom_size[self._ball_geom_id, 0]
+        self._g1_qpos_address = self.model.jnt_qposadr[
+            self._g1_freejoint_id
+        ]
+        self._ball_qpos_address = self.model.jnt_qposadr[
+            self._ball_freejoint_id
+        ]
 
         self._elapsed_steps = 0
         self._ball_contact_occurred = False
@@ -257,6 +279,57 @@ class G1SoccerEnv(gym.Env):
                 return True
         return False
 
+    def _sample_initial_xy_positions(
+        self,
+        difficulty: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if not 0.0 <= difficulty <= 1.0:
+            raise ValueError("Initial-state difficulty must be in [0, 1]")
+
+        final_ball_xy = self.np_random.uniform(
+            low=RANDOM_BALL_XY_LOW,
+            high=RANDOM_BALL_XY_HIGH,
+        )
+        behind_distance = self.np_random.uniform(*RANDOM_BEHIND_DISTANCE)
+        lateral_offset = self.np_random.uniform(*RANDOM_LATERAL_OFFSET)
+        final_g1_xy = np.array(
+            [
+                final_ball_xy[0] - behind_distance,
+                final_ball_xy[1] + lateral_offset,
+            ],
+            dtype=np.float64,
+        )
+
+        g1_xy = FIXED_G1_XY + difficulty * (
+            final_g1_xy - FIXED_G1_XY
+        )
+        ball_xy = FIXED_BALL_XY + difficulty * (
+            final_ball_xy - FIXED_BALL_XY
+        )
+        return g1_xy, ball_xy
+
+    def _set_initial_xy_positions(
+        self,
+        g1_xy: np.ndarray,
+        ball_xy: np.ndarray,
+    ):
+        g1_xy = np.asarray(g1_xy, dtype=np.float64)
+        ball_xy = np.asarray(ball_xy, dtype=np.float64)
+        if g1_xy.shape != (2,) or ball_xy.shape != (2,):
+            raise ValueError("Initial XY positions must each have shape (2,)")
+        if not np.all(np.isfinite(np.concatenate([g1_xy, ball_xy]))):
+            raise ValueError("Initial XY positions must be finite")
+        if g1_xy[0] >= ball_xy[0]:
+            raise ValueError("The G1 must start behind the ball")
+
+        self.data.qpos[
+            self._g1_qpos_address : self._g1_qpos_address + 2
+        ] = g1_xy
+        self.data.qpos[
+            self._ball_qpos_address : self._ball_qpos_address + 2
+        ] = ball_xy
+        mujoco.mj_forward(self.model, self.data)
+
     def _advance_physics(self, command: np.ndarray, physics_steps: int):
         goal = False
         fell = False
@@ -282,9 +355,15 @@ class G1SoccerEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        del options
+        options = {} if options is None else dict(options)
 
         reset_g1_for_locomotion(self.model, self.data, self.controller)
+        difficulty = options.get("initial_state_difficulty")
+        if difficulty is None:
+            difficulty = 1.0 if self.randomize_initial_positions else 0.0
+        g1_xy, ball_xy = self._sample_initial_xy_positions(float(difficulty))
+        self._set_initial_xy_positions(g1_xy, ball_xy)
+
         zero_command = np.zeros(3, dtype=np.float32)
         self.controller.reset(self.data, zero_command)
         self._elapsed_steps = 0
@@ -298,7 +377,12 @@ class G1SoccerEnv(gym.Env):
 
         if self.render_mode == "human":
             self.render()
-        return self._get_observation(), {}
+        info = {
+            "initial_g1_xy": g1_xy.copy(),
+            "initial_ball_xy": ball_xy.copy(),
+            "initial_state_difficulty": float(difficulty),
+        }
+        return self._get_observation(), info
 
     def step(self, action):
         command = normalized_action_to_command(action)

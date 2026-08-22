@@ -17,6 +17,7 @@ def parse_args():
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--randomize-initial-positions", action="store_true")
     parser.add_argument(
         "--render",
         action="store_true",
@@ -35,8 +36,12 @@ def evaluate(
     episodes: int,
     seed: int,
     render: bool,
+    randomize_initial_positions: bool,
 ) -> dict[str, float | int]:
-    env = G1SoccerEnv(render_mode="human" if render else None)
+    env = G1SoccerEnv(
+        render_mode="human" if render else None,
+        randomize_initial_positions=randomize_initial_positions,
+    )
     episode_rewards = []
     episode_lengths = []
     successful_episode_lengths = []
@@ -77,6 +82,7 @@ def evaluate(
         "fall_rate": falls / episodes,
         "mean_reward": float(np.mean(episode_rewards)),
         "mean_episode_length": float(np.mean(episode_lengths)),
+        "episode_length_std": float(np.std(episode_lengths)),
         "mean_steps_to_goal": (
             float(np.mean(successful_episode_lengths))
             if successful_episode_lengths
@@ -93,6 +99,7 @@ def main():
         episodes=args.episodes,
         seed=args.seed,
         render=args.render,
+        randomize_initial_positions=args.randomize_initial_positions,
     )
 
     print(f"Goals: {results['goals']}/{args.episodes}")
@@ -101,6 +108,7 @@ def main():
     print(f"Fall rate: {results['fall_rate']:.1%}")
     print(f"Mean reward: {results['mean_reward']:.3f}")
     print(f"Mean episode length: {results['mean_episode_length']:.1f}")
+    print(f"Episode length std: {results['episode_length_std']:.1f}")
     print(f"Mean steps to goal: {results['mean_steps_to_goal']:.1f}")
 
 

@@ -28,7 +28,8 @@ SEED ?= 0
 	check-g1-locomotion inspect-g1-locomotion \
 	check-g1-soccer inspect-g1-soccer \
 	check-g1-soccer-env inspect-g1-soccer-env \
-	train-g1-soccer-policy evaluate-g1-soccer-policy
+	train-g1-soccer-policy evaluate-g1-soccer-policy \
+	train-g1-soccer-curriculum evaluate-g1-soccer-randomized-policy
 
 help:
 	@echo "Available targets:"
@@ -65,6 +66,8 @@ help:
 	@echo "  make inspect-g1-soccer-env                       Render an environment rollout"
 	@echo "  make train-g1-soccer-policy                      Train the high-level G1 soccer policy"
 	@echo "  make evaluate-g1-soccer-policy                   Render the learned high-level policy"
+	@echo "  make train-g1-soccer-curriculum                  Continue training with adaptive random starts"
+	@echo "  make evaluate-g1-soccer-randomized-policy        Render randomized learned-policy episodes"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -244,4 +247,19 @@ train-g1-soccer-policy:
 evaluate-g1-soccer-policy:
 	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
 		--seed $(SEED) \
+		--render
+
+train-g1-soccer-curriculum:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED) \
+		--adaptive-curriculum \
+		--resume models/ppo_3d_g1_soccer_fixed.zip \
+		--output models/ppo_3d_g1_soccer_randomized.zip
+
+evaluate-g1-soccer-randomized-policy:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
+		--model models/ppo_3d_g1_soccer_randomized.zip \
+		--seed $(SEED) \
+		--randomize-initial-positions \
+		--episodes 5 \
 		--render
