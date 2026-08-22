@@ -25,7 +25,8 @@ SEED ?= 0
 	plot-cylinder-learning-curves \
 	check-g1 inspect-g1 \
 	setup-g1-locomotion download-g1-locomotion-policy \
-	check-g1-locomotion inspect-g1-locomotion
+	check-g1-locomotion inspect-g1-locomotion \
+	check-g1-soccer inspect-g1-soccer
 
 help:
 	@echo "Available targets:"
@@ -56,6 +57,8 @@ help:
 	@echo "  make download-g1-locomotion-policy               Download and verify the official policy"
 	@echo "  make check-g1-locomotion                         Check stand, forward, lateral, and yaw commands"
 	@echo "  make inspect-g1-locomotion                       Render one forward-command rollout"
+	@echo "  make check-g1-soccer                             Check scripted foot-ball interaction"
+	@echo "  make inspect-g1-soccer                           Render the scripted G1 soccer rollout"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -215,3 +218,9 @@ inspect-g1-locomotion:
 		--vx 0.5 \
 		--duration 10 \
 		--render
+
+check-g1-soccer:
+	$(LOCOMOTION_PYTHON) -m scripts.evaluate_3d_g1_soccer
+
+inspect-g1-soccer:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer --render
