@@ -33,7 +33,11 @@ SEED ?= 0
 	train-g1-soccer-recovery evaluate-g1-soccer-recovery \
 	train-g1-soccer-foot-approach \
 	finetune-g1-soccer-foot-approach \
-	evaluate-g1-soccer-foot-approach
+	evaluate-g1-soccer-foot-approach \
+	train-g1-soccer-executable-commands \
+	evaluate-g1-soccer-executable-commands \
+	inspect-g1-policy-vs-geometric \
+	evaluate-g1-geometric-broad
 
 help:
 	@echo "Available targets:"
@@ -77,6 +81,10 @@ help:
 	@echo "  make train-g1-soccer-foot-approach                Train with foot-aware approach shaping"
 	@echo "  make finetune-g1-soccer-foot-approach             Focus training on difficult recovery starts"
 	@echo "  make evaluate-g1-soccer-foot-approach             Render the improved recovery policy"
+	@echo "  make train-g1-soccer-executable-commands          Train with executable walking commands"
+	@echo "  make evaluate-g1-soccer-executable-commands       Render the executable-command policy"
+	@echo "  make inspect-g1-policy-vs-geometric               Compare ten failed PPO starts side by side"
+	@echo "  make evaluate-g1-geometric-broad                  Measure broad geometric-controller generalization"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -324,3 +332,40 @@ evaluate-g1-soccer-foot-approach:
 		--max-episode-steps 200 \
 		--episodes 5 \
 		--render
+
+train-g1-soccer-executable-commands:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED) \
+		--recovery-curriculum \
+		--initial-curriculum-difficulty 0.8 \
+		--observation-mode soccer_state \
+		--reward-mode approach_progress \
+		--max-episode-steps 200 \
+		--resume models/ppo_3d_g1_soccer_foot_approach_finetuned.zip \
+		--output models/ppo_3d_g1_soccer_executable_commands.zip
+
+evaluate-g1-soccer-executable-commands:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
+		--model models/ppo_3d_g1_soccer_executable_commands.zip \
+		--seed $(SEED) \
+		--observation-mode soccer_state \
+		--randomize-initial-positions \
+		--recovery-start-probability 1.0 \
+		--max-episode-steps 200 \
+		--episodes 5 \
+		--render
+
+inspect-g1-policy-vs-geometric:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_geometric_controller \
+		--seed $(SEED) \
+		--episodes 100 \
+		--failed-episodes 10 \
+		--render-failures \
+		--playback-speed 2
+
+evaluate-g1-geometric-broad:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_geometric_generalization \
+		--seed $(SEED) \
+		--episodes 100

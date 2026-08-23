@@ -31,6 +31,11 @@ APPROACH_PROGRESS_WEIGHT = 0.2
 BALL_PROGRESS_WEIGHT = 0.5
 APPROACH_DISTANCE = 0.75
 APPROACH_LATERAL_OFFSET = -0.08
+STAND_TRANSLATION_THRESHOLD = 0.05
+MINIMUM_WALKING_TRANSLATION = np.array(
+    [0.2, 0.3],
+    dtype=np.float32,
+)
 MINIMUM_PELVIS_HEIGHT = 0.45
 MINIMUM_UPRIGHT_ALIGNMENT = 0.5
 RENDER_HEIGHT = 400
@@ -53,7 +58,7 @@ REWARD_MODES = ("goal", "approach_progress")
 
 
 def normalized_action_to_command(action: np.ndarray) -> np.ndarray:
-    """Map [-1, 1] actions to controller commands while preserving zero."""
+    """Map normalized actions to commands the locomotion policy can execute."""
     normalized_action = np.asarray(action, dtype=np.float32)
     if normalized_action.shape != (3,):
         raise ValueError(
@@ -64,11 +69,21 @@ def normalized_action_to_command(action: np.ndarray) -> np.ndarray:
 
     normalized_action = np.clip(normalized_action, -1.0, 1.0)
     negative_scale = -COMMAND_LOW
-    return np.where(
+    command = np.where(
         normalized_action < 0.0,
         normalized_action * negative_scale,
         normalized_action * COMMAND_HIGH,
     ).astype(np.float32)
+    translation_speed = float(np.linalg.norm(command[:2]))
+    if translation_speed <= STAND_TRANSLATION_THRESHOLD:
+        command[:] = 0.0
+    else:
+        activation_level = float(
+            np.max(np.abs(command[:2]) / MINIMUM_WALKING_TRANSLATION)
+        )
+        if activation_level < 1.0:
+            command[:2] /= activation_level
+    return command
 
 
 class G1SoccerEnv(gym.Env):
@@ -446,23 +461,36 @@ class G1SoccerEnv(gym.Env):
         )
         return g1_xy, ball_xy
 
-    def _set_initial_xy_positions(
+    def _set_initial_pose(
         self,
         g1_xy: np.ndarray,
         ball_xy: np.ndarray,
+        g1_yaw: float = 0.0,
     ):
         g1_xy = np.asarray(g1_xy, dtype=np.float64)
         ball_xy = np.asarray(ball_xy, dtype=np.float64)
+        g1_yaw = float(g1_yaw)
         if g1_xy.shape != (2,) or ball_xy.shape != (2,):
             raise ValueError("Initial XY positions must each have shape (2,)")
-        if not np.all(np.isfinite(np.concatenate([g1_xy, ball_xy]))):
-            raise ValueError("Initial XY positions must be finite")
+        if not np.all(
+            np.isfinite(np.concatenate([g1_xy, ball_xy, [g1_yaw]]))
+        ):
+            raise ValueError("Initial pose values must be finite")
         if np.linalg.norm(g1_xy - ball_xy) < MINIMUM_INITIAL_SEPARATION:
             raise ValueError("The G1 and ball initial positions are too close")
 
         self.data.qpos[
             self._g1_qpos_address : self._g1_qpos_address + 2
         ] = g1_xy
+        half_yaw = 0.5 * g1_yaw
+        self.data.qpos[
+            self._g1_qpos_address + 3 : self._g1_qpos_address + 7
+        ] = (
+            np.cos(half_yaw),
+            0.0,
+            0.0,
+            np.sin(half_yaw),
+        )
         self.data.qpos[
             self._ball_qpos_address : self._ball_qpos_address + 2
         ] = ball_xy
@@ -520,12 +548,23 @@ class G1SoccerEnv(gym.Env):
             recovery_start = bool(
                 self.np_random.random() < recovery_start_probability
             )
-        g1_xy, ball_xy = self._sample_initial_xy_positions(
-            float(difficulty),
-            recovery_start,
-            recovery_difficulty,
-        )
-        self._set_initial_xy_positions(g1_xy, ball_xy)
+        explicit_g1_xy = options.get("initial_g1_xy")
+        explicit_ball_xy = options.get("initial_ball_xy")
+        if (explicit_g1_xy is None) != (explicit_ball_xy is None):
+            raise ValueError(
+                "initial_g1_xy and initial_ball_xy must be provided together"
+            )
+        if explicit_g1_xy is None:
+            g1_xy, ball_xy = self._sample_initial_xy_positions(
+                float(difficulty),
+                recovery_start,
+                recovery_difficulty,
+            )
+        else:
+            g1_xy = np.asarray(explicit_g1_xy, dtype=np.float64)
+            ball_xy = np.asarray(explicit_ball_xy, dtype=np.float64)
+        g1_yaw = float(options.get("initial_g1_yaw", 0.0))
+        self._set_initial_pose(g1_xy, ball_xy, g1_yaw)
 
         zero_command = np.zeros(3, dtype=np.float32)
         self.controller.reset(self.data, zero_command)
@@ -545,6 +584,7 @@ class G1SoccerEnv(gym.Env):
         info = {
             "initial_g1_xy": g1_xy.copy(),
             "initial_ball_xy": ball_xy.copy(),
+            "initial_g1_yaw": g1_yaw,
             "initial_state_difficulty": float(difficulty),
             "recovery_start": recovery_start,
             "recovery_start_probability": recovery_start_probability,

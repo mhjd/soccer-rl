@@ -9,6 +9,7 @@ from src.soccer_3d.g1_soccer_env import (
     FIXED_G1_XY,
     G1SoccerEnv,
     MINIMUM_INITIAL_SEPARATION,
+    MINIMUM_WALKING_TRANSLATION,
     RANDOM_BALL_XY_HIGH,
     RANDOM_BALL_XY_LOW,
     RECOVERY_G1_LATERAL_DISTANCE,
@@ -54,6 +55,25 @@ def check_action_mapping():
         raise RuntimeError(
             f"Unexpected normalized-action mapping:\n{actual}"
         )
+
+    stand_command = normalized_action_to_command(
+        np.array([0.01, 0.01, 1.0], dtype=np.float32)
+    )
+    if not np.allclose(stand_command, 0.0):
+        raise RuntimeError("The walking deadband did not select stand")
+
+    weak_action = np.array([-0.2, -0.2, 1.0], dtype=np.float32)
+    walking_command = normalized_action_to_command(weak_action)
+    if not np.isclose(
+        np.max(
+            np.abs(walking_command[:2])
+            / MINIMUM_WALKING_TRANSLATION
+        ),
+        1.0,
+    ):
+        raise RuntimeError("A weak walking action stayed in the dead zone")
+    if not np.isclose(walking_command[2], 0.2):
+        raise RuntimeError("Walking activation changed the yaw command")
 
 
 def check_gymnasium_contract():
@@ -188,6 +208,39 @@ def check_recovery_resets():
         env.close()
 
 
+def check_explicit_initial_pose():
+    env = G1SoccerEnv()
+    try:
+        requested_g1_xy = np.array([1.8, -0.8])
+        requested_ball_xy = np.array([0.6, 0.4])
+        requested_yaw = 1.2
+        _, info = env.reset(
+            seed=0,
+            options={
+                "initial_g1_xy": requested_g1_xy,
+                "initial_ball_xy": requested_ball_xy,
+                "initial_g1_yaw": requested_yaw,
+            },
+        )
+        if not np.allclose(info["initial_g1_xy"], requested_g1_xy):
+            raise RuntimeError("Explicit G1 XY was not preserved")
+        if not np.allclose(info["initial_ball_xy"], requested_ball_xy):
+            raise RuntimeError("Explicit ball XY was not preserved")
+        if not np.isclose(info["initial_g1_yaw"], requested_yaw):
+            raise RuntimeError("Explicit G1 yaw was not preserved")
+
+        pelvis_rotation = env.data.xmat[env.controller.pelvis_id].reshape(3, 3)
+        actual_yaw = np.arctan2(
+            pelvis_rotation[1, 0],
+            pelvis_rotation[0, 0],
+        )
+        yaw_error = (actual_yaw - requested_yaw + np.pi) % (2 * np.pi) - np.pi
+        if abs(yaw_error) > 0.05:
+            raise RuntimeError("Settled G1 yaw differs from the requested yaw")
+    finally:
+        env.close()
+
+
 def check_adaptive_curriculum():
     base_env = G1SoccerEnv(max_episode_steps=1)
     env = G1AdaptiveStartCurriculum(base_env)
@@ -276,6 +329,7 @@ def main():
     check_truncation()
     check_randomized_resets()
     check_recovery_resets()
+    check_explicit_initial_pose()
     check_adaptive_curriculum()
     check_scripted_goal(args.render)
     print("g1 soccer environment: passed")
