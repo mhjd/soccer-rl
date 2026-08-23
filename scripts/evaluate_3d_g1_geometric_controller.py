@@ -491,7 +491,7 @@ class PilotTools:
             max_steps=120,
         )
 
-    def align_with_shot(self, tolerance=0.08, max_cycles=60):
+    def align_with_shot(self, tolerance=0.12, max_cycles=60):
         for _ in range(max_cycles):
             situation = self.read_situation()
             if abs(situation.heading_error) <= tolerance:
