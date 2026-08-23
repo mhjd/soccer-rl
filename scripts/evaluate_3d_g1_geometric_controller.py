@@ -34,7 +34,72 @@ class Situation:
     heading_error: float
 
 
+@dataclass
+class TraceSample:
+    attempt: int
+    phase: str
+    step: int
+    pelvis_xy: np.ndarray
+    ball_xy: np.ndarray
+    approach_xy: np.ndarray
+    yaw: float
+    heading_error: float
+    command: np.ndarray
+    contact: bool
+    goal: bool
+    fell: bool
+
+
+class GeometricTrace:
+    """Observe controller phases without affecting their decisions."""
+
+    def __init__(self):
+        self.attempt = 0
+        self.phase = "uninitialized"
+        self.samples = []
+
+    def start_attempt(self, attempt):
+        self.attempt = attempt
+
+    def start_phase(self, phase, pilot):
+        self.phase = phase
+        self.record(
+            pilot.read_situation(),
+            np.zeros(3, dtype=np.float32),
+            pilot.info,
+        )
+
+    def record(self, situation, command, info):
+        self.samples.append(
+            TraceSample(
+                attempt=self.attempt,
+                phase=self.phase,
+                step=int(info.get("elapsed_steps", 0)),
+                pelvis_xy=situation.pelvis_xy.copy(),
+                ball_xy=situation.ball_xy.copy(),
+                approach_xy=situation.approach_xy.copy(),
+                yaw=situation.yaw,
+                heading_error=situation.heading_error,
+                command=np.asarray(command, dtype=np.float32).copy(),
+                contact=bool(info.get("ball_contact_occurred", False)),
+                goal=bool(info.get("goal", False)),
+                fell=bool(info.get("fell", False)),
+            )
+        )
+
+    def samples_for(self, phase, attempt=None):
+        return [
+            sample
+            for sample in self.samples
+            if sample.phase == phase
+            and (attempt is None or sample.attempt == attempt)
+        ]
+
+
 DEFAULT_MODEL_PATH = Path("models/ppo_3d_g1_soccer_executable_commands.zip")
+BALL_PATH_CLEARANCE = 0.45
+BALL_DETOUR_RADIUS = 0.8
+DETOUR_SIDE_EPSILON = 0.05
 
 
 class PairedViewer:
@@ -209,6 +274,7 @@ class PilotTools:
         aim_y_offset=0.0,
         verbose=False,
         recorded_actions=None,
+        trace=None,
     ):
         self.env = env
         self.observation = observation
@@ -216,6 +282,8 @@ class PilotTools:
         self.aim_y_offset = aim_y_offset
         self.verbose = verbose
         self.recorded_actions = recorded_actions
+        self.trace = trace
+        self.episode_ended = False
 
     def read_situation(self):
         pelvis_id = self.env.controller.pelvis_id
@@ -276,9 +344,36 @@ class PilotTools:
             self.observation, _, terminated, truncated, self.info = (
                 self.env.step(action)
             )
-            if terminated or truncated:
+            self.episode_ended = terminated or truncated
+            if self.trace is not None:
+                self.trace.record(
+                    self.read_situation(),
+                    command,
+                    self.info,
+                )
+            if self.episode_ended:
                 break
-        return terminated or truncated
+        return self.episode_ended
+
+    def command_toward(self, situation, target_xy, face_shot=True):
+        error_world = target_xy - situation.pelvis_xy
+        distance = float(np.linalg.norm(error_world))
+        pelvis_id = self.env.controller.pelvis_id
+        rotation = self.env.data.xmat[pelvis_id].reshape(3, 3)
+        error_robot = rotation[:2, :2].T @ error_world
+        desired_speed = min(0.6, max(0.25, distance))
+        translation = desired_speed * error_robot / distance
+        translation = np.clip(
+            translation,
+            COMMAND_LOW[:2],
+            COMMAND_HIGH[:2],
+        )
+        yaw_rate = (
+            np.clip(1.5 * situation.heading_error, -0.2, 0.2)
+            if face_shot
+            else 0.0
+        )
+        return np.array([translation[0], translation[1], yaw_rate])
 
     def move_to_point(
         self,
@@ -297,23 +392,12 @@ class PilotTools:
                 self.apply_command(np.zeros(3, dtype=np.float32), steps=2)
                 return True
 
-            pelvis_id = self.env.controller.pelvis_id
-            rotation = self.env.data.xmat[pelvis_id].reshape(3, 3)
-            error_robot = rotation[:2, :2].T @ error_world
-            desired_speed = min(0.6, max(0.25, distance))
-            translation = desired_speed * error_robot / distance
-            translation = np.clip(
-                translation,
-                COMMAND_LOW[:2],
-                COMMAND_HIGH[:2],
-            )
-            yaw_rate = (
-                np.clip(1.5 * situation.heading_error, -0.2, 0.2)
-                if face_shot
-                else 0.0
-            )
             ended = self.apply_command(
-                np.array([translation[0], translation[1], yaw_rate])
+                self.command_toward(
+                    situation,
+                    target_xy,
+                    face_shot=face_shot,
+                )
             )
             if ended:
                 return False
@@ -322,12 +406,92 @@ class PilotTools:
         return False
 
     def move_to_approach(self):
+        situation = self.read_situation()
+        direct_path = situation.approach_xy - situation.pelvis_xy
+        path_length_squared = float(np.dot(direct_path, direct_path))
+        if path_length_squared <= np.finfo(np.float64).eps:
+            ball_blocks_path = False
+        else:
+            projection = float(
+                np.clip(
+                    np.dot(
+                        situation.ball_xy - situation.pelvis_xy,
+                        direct_path,
+                    )
+                    / path_length_squared,
+                    0.0,
+                    1.0,
+                )
+            )
+            closest_path_point = (
+                situation.pelvis_xy + projection * direct_path
+            )
+            path_clearance = float(
+                np.linalg.norm(closest_path_point - situation.ball_xy)
+            )
+            ball_blocks_path = (
+                0.0 < projection < 1.0
+                and path_clearance < BALL_PATH_CLEARANCE
+            )
+
+        if ball_blocks_path:
+            shot_direction = situation.goal_xy - situation.ball_xy
+            shot_direction /= np.linalg.norm(shot_direction)
+            shot_lateral = np.array(
+                [-shot_direction[1], shot_direction[0]]
+            )
+            lateral_coordinate = float(
+                np.dot(
+                    situation.pelvis_xy - situation.ball_xy,
+                    shot_lateral,
+                )
+            )
+            if abs(lateral_coordinate) > DETOUR_SIDE_EPSILON:
+                detour_side = np.sign(lateral_coordinate)
+            else:
+                candidates = (
+                    situation.ball_xy - BALL_DETOUR_RADIUS * shot_lateral,
+                    situation.ball_xy + BALL_DETOUR_RADIUS * shot_lateral,
+                )
+                detour_side = (
+                    -1.0
+                    if abs(candidates[0][1]) <= abs(candidates[1][1])
+                    else 1.0
+                )
+
+            def detour_target(current_situation):
+                current_shot_direction = (
+                    current_situation.goal_xy - current_situation.ball_xy
+                )
+                current_shot_direction /= np.linalg.norm(
+                    current_shot_direction
+                )
+                current_shot_lateral = np.array(
+                    [
+                        -current_shot_direction[1],
+                        current_shot_direction[0],
+                    ]
+                )
+                return (
+                    current_situation.ball_xy
+                    + detour_side
+                    * BALL_DETOUR_RADIUS
+                    * current_shot_lateral
+                )
+
+            if self.trace is not None:
+                self.trace.start_phase("detour", self)
+            if not self.move_to_point(detour_target, max_steps=100):
+                return False
+
+        if self.trace is not None:
+            self.trace.start_phase("approach", self)
         return self.move_to_point(
             lambda situation: situation.approach_xy,
             max_steps=120,
         )
 
-    def align_with_shot(self, tolerance=0.08, max_cycles=12):
+    def align_with_shot(self, tolerance=0.08, max_cycles=60):
         for _ in range(max_cycles):
             situation = self.read_situation()
             if abs(situation.heading_error) <= tolerance:
@@ -353,6 +517,9 @@ class PilotTools:
         )
 
     def solve(self):
+        attempt = 1
+        if self.trace is not None:
+            self.trace.start_attempt(attempt)
         if self.verbose:
             print("primitive=move_to_approach", flush=True)
         reached = self.move_to_approach()
@@ -360,6 +527,8 @@ class PilotTools:
             self.print_summary()
         if not reached or self.info.get("goal") or self.info.get("fell"):
             return reached, False, self.info
+        if self.trace is not None:
+            self.trace.start_phase("alignment", self)
         if self.verbose:
             print("primitive=align_with_shot", flush=True)
         aligned = self.align_with_shot()
@@ -367,11 +536,16 @@ class PilotTools:
             self.print_summary()
         if not aligned or self.info.get("goal") or self.info.get("fell"):
             return reached, aligned, self.info
+        if self.trace is not None:
+            self.trace.start_phase("drive_through", self)
         if self.verbose:
             print("primitive=drive_through_ball", flush=True)
         self.drive_through_ball()
         if self.verbose:
             self.print_summary()
+        self.info = dict(self.info)
+        self.info["geometric_attempts"] = attempt
+        self.info["drive_outcome"] = "completed"
         return reached, aligned, self.info
 
     def print_summary(self, prefix="state"):

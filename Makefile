@@ -4,6 +4,7 @@ LOCOMOTION_PYTHON := .venv-locomotion/bin/python
 LOCOMOTION_MJ_PYTHON := .venv-locomotion/bin/mjpython
 LOCOMOTION_UV_CACHE ?= /tmp/soccer-rl-uv-cache
 SEED ?= 0
+EPISODE ?= 0
 
 .PHONY: help install train evaluate \
 	train-cylinder evaluate-cylinder \
@@ -37,7 +38,8 @@ SEED ?= 0
 	train-g1-soccer-executable-commands \
 	evaluate-g1-soccer-executable-commands \
 	inspect-g1-policy-vs-geometric \
-	evaluate-g1-geometric-broad
+	evaluate-g1-geometric-broad \
+	inspect-g1-geometric-broad
 
 help:
 	@echo "Available targets:"
@@ -85,6 +87,7 @@ help:
 	@echo "  make evaluate-g1-soccer-executable-commands       Render the executable-command policy"
 	@echo "  make inspect-g1-policy-vs-geometric               Compare ten failed PPO starts side by side"
 	@echo "  make evaluate-g1-geometric-broad                  Measure broad geometric-controller generalization"
+	@echo "  make inspect-g1-geometric-broad EPISODE=N          Render one reproducible broad test case"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -368,4 +371,11 @@ evaluate-g1-geometric-broad:
 	$(LOCOMOTION_PYTHON) \
 		-m scripts.evaluate_3d_g1_geometric_generalization \
 		--seed $(SEED) \
-		--episodes 100
+		--episodes 100 \
+		--report-json /tmp/soccer-rl-g1-geometric-seed$(SEED).json
+
+inspect-g1-geometric-broad:
+	$(LOCOMOTION_MJ_PYTHON) \
+		-m scripts.inspect_3d_g1_geometric_generalization \
+		--seed $(SEED) \
+		--episode $(EPISODE)
