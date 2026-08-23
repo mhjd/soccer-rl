@@ -5,6 +5,7 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from src.soccer_3d import G1SoccerEnv
+from src.soccer_3d.g1_soccer_env import MAX_EPISODE_STEPS, OBSERVATION_MODES
 
 
 DEFAULT_MODEL_PATH = Path("models/ppo_3d_g1_soccer_fixed.zip")
@@ -19,6 +20,26 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--randomize-initial-positions", action="store_true")
     parser.add_argument(
+        "--observation-mode",
+        choices=OBSERVATION_MODES,
+        default="task",
+    )
+    parser.add_argument(
+        "--recovery-start-probability",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--recovery-state-difficulty",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--max-episode-steps",
+        type=int,
+        default=MAX_EPISODE_STEPS,
+    )
+    parser.add_argument(
         "--render",
         action="store_true",
         help="Render episodes in a MuJoCo window.",
@@ -28,6 +49,12 @@ def parse_args():
         parser.error("--episodes must be positive")
     if not args.model.exists():
         parser.error(f"model not found: {args.model}")
+    if not 0.0 <= args.recovery_start_probability <= 1.0:
+        parser.error("--recovery-start-probability must be in [0, 1]")
+    if not 0.0 <= args.recovery_state_difficulty <= 1.0:
+        parser.error("--recovery-state-difficulty must be in [0, 1]")
+    if args.max_episode_steps <= 0:
+        parser.error("--max-episode-steps must be positive")
     return args
 
 
@@ -37,20 +64,38 @@ def evaluate(
     seed: int,
     render: bool,
     randomize_initial_positions: bool,
+    recovery_start_probability: float,
+    recovery_state_difficulty: float,
+    max_episode_steps: int,
+    observation_mode: str,
 ) -> dict[str, float | int]:
     env = G1SoccerEnv(
         render_mode="human" if render else None,
         randomize_initial_positions=randomize_initial_positions,
+        recovery_start_probability=recovery_start_probability,
+        max_episode_steps=max_episode_steps,
+        observation_mode=observation_mode,
     )
     episode_rewards = []
     episode_lengths = []
     successful_episode_lengths = []
     goals = 0
     falls = 0
+    recovery_episodes = 0
+    recovery_goals = 0
 
     try:
         for episode_index in range(episodes):
-            observation, _ = env.reset(seed=seed + episode_index)
+            observation, reset_info = env.reset(
+                seed=seed + episode_index,
+                options={
+                    "recovery_state_difficulty": (
+                        recovery_state_difficulty
+                    )
+                },
+            )
+            recovery_start = bool(reset_info["recovery_start"])
+            recovery_episodes += int(recovery_start)
             terminated = False
             truncated = False
             episode_reward = 0.0
@@ -72,6 +117,7 @@ def evaluate(
             episode_lengths.append(episode_length)
             if goal:
                 successful_episode_lengths.append(episode_length)
+                recovery_goals += int(recovery_start)
     finally:
         env.close()
 
@@ -88,6 +134,13 @@ def evaluate(
             if successful_episode_lengths
             else float("nan")
         ),
+        "recovery_episodes": recovery_episodes,
+        "recovery_goals": recovery_goals,
+        "recovery_success_rate": (
+            recovery_goals / recovery_episodes
+            if recovery_episodes
+            else 0.0
+        ),
     }
 
 
@@ -100,6 +153,10 @@ def main():
         seed=args.seed,
         render=args.render,
         randomize_initial_positions=args.randomize_initial_positions,
+        recovery_start_probability=args.recovery_start_probability,
+        recovery_state_difficulty=args.recovery_state_difficulty,
+        max_episode_steps=args.max_episode_steps,
+        observation_mode=args.observation_mode,
     )
 
     print(f"Goals: {results['goals']}/{args.episodes}")
@@ -110,6 +167,15 @@ def main():
     print(f"Mean episode length: {results['mean_episode_length']:.1f}")
     print(f"Episode length std: {results['episode_length_std']:.1f}")
     print(f"Mean steps to goal: {results['mean_steps_to_goal']:.1f}")
+    if results["recovery_episodes"]:
+        print(
+            "Recovery-start goals: "
+            f"{results['recovery_goals']}/{results['recovery_episodes']}"
+        )
+        print(
+            "Recovery-start success rate: "
+            f"{results['recovery_success_rate']:.1%}"
+        )
 
 
 if __name__ == "__main__":

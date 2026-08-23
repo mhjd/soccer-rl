@@ -29,7 +29,11 @@ SEED ?= 0
 	check-g1-soccer inspect-g1-soccer \
 	check-g1-soccer-env inspect-g1-soccer-env \
 	train-g1-soccer-policy evaluate-g1-soccer-policy \
-	train-g1-soccer-curriculum evaluate-g1-soccer-randomized-policy
+	train-g1-soccer-curriculum evaluate-g1-soccer-randomized-policy \
+	train-g1-soccer-recovery evaluate-g1-soccer-recovery \
+	train-g1-soccer-foot-approach \
+	finetune-g1-soccer-foot-approach \
+	evaluate-g1-soccer-foot-approach
 
 help:
 	@echo "Available targets:"
@@ -68,6 +72,11 @@ help:
 	@echo "  make evaluate-g1-soccer-policy                   Render the learned high-level policy"
 	@echo "  make train-g1-soccer-curriculum                  Continue training with adaptive random starts"
 	@echo "  make evaluate-g1-soccer-randomized-policy        Render randomized learned-policy episodes"
+	@echo "  make train-g1-soccer-recovery                    Continue training with progressive recovery starts"
+	@echo "  make evaluate-g1-soccer-recovery                 Render forced recovery-start episodes"
+	@echo "  make train-g1-soccer-foot-approach                Train with foot-aware approach shaping"
+	@echo "  make finetune-g1-soccer-foot-approach             Focus training on difficult recovery starts"
+	@echo "  make evaluate-g1-soccer-foot-approach             Render the improved recovery policy"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -261,5 +270,57 @@ evaluate-g1-soccer-randomized-policy:
 		--model models/ppo_3d_g1_soccer_randomized.zip \
 		--seed $(SEED) \
 		--randomize-initial-positions \
+		--episodes 5 \
+		--render
+
+train-g1-soccer-recovery:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED) \
+		--recovery-curriculum \
+		--max-episode-steps 200 \
+		--resume models/ppo_3d_g1_soccer_randomized.zip \
+		--output models/ppo_3d_g1_soccer_recovery.zip
+
+evaluate-g1-soccer-recovery:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
+		--model models/ppo_3d_g1_soccer_recovery.zip \
+		--seed $(SEED) \
+		--randomize-initial-positions \
+		--recovery-start-probability 1.0 \
+		--max-episode-steps 200 \
+		--episodes 5 \
+		--render
+
+train-g1-soccer-foot-approach:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED) \
+		--recovery-curriculum \
+		--observation-mode soccer_state \
+		--reward-mode approach_progress \
+		--learning-rate 0.00003 \
+		--target-kl 0.02 \
+		--max-episode-steps 200 \
+		--transfer-from models/ppo_3d_g1_soccer_recovery.zip \
+		--output models/ppo_3d_g1_soccer_foot_approach.zip
+
+finetune-g1-soccer-foot-approach:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--seed $(SEED) \
+		--recovery-curriculum \
+		--initial-curriculum-difficulty 0.8 \
+		--observation-mode soccer_state \
+		--reward-mode approach_progress \
+		--max-episode-steps 200 \
+		--resume models/ppo_3d_g1_soccer_foot_approach.zip \
+		--output models/ppo_3d_g1_soccer_foot_approach_finetuned.zip
+
+evaluate-g1-soccer-foot-approach:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
+		--model models/ppo_3d_g1_soccer_foot_approach_finetuned.zip \
+		--seed $(SEED) \
+		--observation-mode soccer_state \
+		--randomize-initial-positions \
+		--recovery-start-probability 1.0 \
+		--max-episode-steps 200 \
 		--episodes 5 \
 		--render

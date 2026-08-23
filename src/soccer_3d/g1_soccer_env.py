@@ -27,6 +27,10 @@ CONTROL_TIMESTEP = 0.1
 MAX_EPISODE_STEPS = 100
 SETTLE_DURATION = 1.0
 GOAL_REWARD = 1.0
+APPROACH_PROGRESS_WEIGHT = 0.2
+BALL_PROGRESS_WEIGHT = 0.5
+APPROACH_DISTANCE = 0.75
+APPROACH_LATERAL_OFFSET = -0.08
 MINIMUM_PELVIS_HEIGHT = 0.45
 MINIMUM_UPRIGHT_ALIGNMENT = 0.5
 RENDER_HEIGHT = 400
@@ -37,6 +41,15 @@ RANDOM_BALL_XY_LOW = np.array([0.8, -0.7], dtype=np.float64)
 RANDOM_BALL_XY_HIGH = np.array([1.6, 0.7], dtype=np.float64)
 RANDOM_BEHIND_DISTANCE = (0.8, 1.4)
 RANDOM_LATERAL_OFFSET = (-0.6, 0.6)
+RECOVERY_G1_X_OFFSET = (-0.1, 0.4)
+RECOVERY_G1_LATERAL_DISTANCE = (0.6, 0.9)
+EASY_RECOVERY_G1_X_OFFSET = (-1.0, -0.7)
+EASY_RECOVERY_G1_LATERAL_DISTANCE = (0.0, 0.2)
+MINIMUM_INITIAL_SEPARATION = 0.5
+TASK_OBSERVATION_SIZE = 13
+SOCCER_STATE_OBSERVATION_SIZE = 30
+OBSERVATION_MODES = ("task", "soccer_state")
+REWARD_MODES = ("goal", "approach_progress")
 
 
 def normalized_action_to_command(action: np.ndarray) -> np.ndarray:
@@ -63,9 +76,11 @@ class G1SoccerEnv(gym.Env):
 
     Action order: forward velocity, lateral velocity, and yaw rate.
 
-    Observation order: robot-frame ball XY, robot-frame ball-to-goal XY,
-    robot-frame pelvis linear XY velocity, pelvis yaw rate, robot-frame ball
-    linear XYZ velocity, and robot-frame ball angular XYZ velocity.
+    The task observation contains robot-frame ball XY, robot-frame ball-to-goal
+    XY, robot-frame pelvis linear XY velocity, pelvis yaw rate, robot-frame ball
+    linear XYZ velocity, and robot-frame ball angular XYZ velocity. The
+    soccer-state mode appends the approach target, foot-ball kinematics, and
+    the most recent locomotion command.
     """
 
     metadata = {
@@ -79,12 +94,23 @@ class G1SoccerEnv(gym.Env):
         max_episode_steps: int = MAX_EPISODE_STEPS,
         render_mode: str | None = None,
         randomize_initial_positions: bool = False,
+        recovery_start_probability: float = 0.0,
+        observation_mode: str = "task",
+        reward_mode: str = "goal",
     ):
         super().__init__()
         if max_episode_steps <= 0:
             raise ValueError("max_episode_steps must be positive")
         if render_mode not in {None, *self.metadata["render_modes"]}:
             raise ValueError(f"Unsupported render mode: {render_mode}")
+        if not 0.0 <= recovery_start_probability <= 1.0:
+            raise ValueError("recovery_start_probability must be in [0, 1]")
+        if observation_mode not in OBSERVATION_MODES:
+            raise ValueError(
+                f"observation_mode must be one of {OBSERVATION_MODES}"
+            )
+        if reward_mode not in REWARD_MODES:
+            raise ValueError(f"reward_mode must be one of {REWARD_MODES}")
 
         policy_path = Path(policy_path)
         if not policy_path.exists():
@@ -99,6 +125,9 @@ class G1SoccerEnv(gym.Env):
         self.max_episode_steps = max_episode_steps
         self.render_mode = render_mode
         self.randomize_initial_positions = randomize_initial_positions
+        self.recovery_start_probability = recovery_start_probability
+        self.observation_mode = observation_mode
+        self.reward_mode = reward_mode
 
         high_level_ratio = CONTROL_TIMESTEP / self.model.opt.timestep
         self.physics_steps_per_action = round(high_level_ratio)
@@ -125,7 +154,12 @@ class G1SoccerEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(13,),
+            shape=(
+                {
+                    "task": TASK_OBSERVATION_SIZE,
+                    "soccer_state": SOCCER_STATE_OBSERVATION_SIZE,
+                }[observation_mode],
+            ),
             dtype=np.float32,
         )
 
@@ -157,7 +191,7 @@ class G1SoccerEnv(gym.Env):
             mujoco.mjtObj.mjOBJ_CAMERA,
             "soccer_overview",
         )
-        self._foot_body_ids = {
+        self._ordered_foot_body_ids = (
             self._name_id(
                 mujoco.mjtObj.mjOBJ_BODY,
                 "left_ankle_roll_link",
@@ -166,7 +200,8 @@ class G1SoccerEnv(gym.Env):
                 mujoco.mjtObj.mjOBJ_BODY,
                 "right_ankle_roll_link",
             ),
-        }
+        )
+        self._foot_body_ids = set(self._ordered_foot_body_ids)
         self._ball_radius = self.model.geom_size[self._ball_geom_id, 0]
         self._g1_qpos_address = self.model.jnt_qposadr[
             self._g1_freejoint_id
@@ -177,9 +212,11 @@ class G1SoccerEnv(gym.Env):
 
         self._elapsed_steps = 0
         self._ball_contact_occurred = False
+        self._recovery_start = False
         self._renderer = None
         self._viewer = None
         self._last_human_render_time = None
+        self._last_command = np.zeros(3, dtype=np.float32)
 
     def _name_id(self, object_type, name: str) -> int:
         object_id = mujoco.mj_name2id(self.model, object_type, name)
@@ -218,7 +255,7 @@ class G1SoccerEnv(gym.Env):
         ball_angular_velocity = world_to_robot @ ball_world_velocity[:3]
         ball_linear_velocity = world_to_robot @ ball_world_velocity[3:]
 
-        observation = np.concatenate(
+        task_observation = np.concatenate(
             [
                 ball_relative[:2],
                 goal_from_ball[:2],
@@ -228,9 +265,74 @@ class G1SoccerEnv(gym.Env):
                 ball_angular_velocity,
             ]
         ).astype(np.float32)
+        if self.observation_mode == "task":
+            observation = task_observation
+        else:
+            approach_position = self._approach_position()
+            approach_relative = world_to_robot @ (
+                approach_position - pelvis_position
+            )
+            foot_ball_positions = []
+            foot_ball_velocities = []
+            for foot_body_id in self._ordered_foot_body_ids:
+                foot_ball_positions.append(
+                    world_to_robot
+                    @ (self.data.xpos[foot_body_id] - ball_position)
+                )
+                foot_world_velocity = self._body_velocity(
+                    foot_body_id,
+                    local=False,
+                )[3:]
+                foot_ball_velocities.append(
+                    world_to_robot
+                    @ (foot_world_velocity - ball_world_velocity[3:])
+                )
+
+            observation = np.concatenate(
+                [
+                    task_observation,
+                    approach_relative[:2],
+                    *foot_ball_positions,
+                    *foot_ball_velocities,
+                    self._last_command,
+                ]
+            ).astype(np.float32)
         if not np.all(np.isfinite(observation)):
             raise RuntimeError("The G1 soccer observation is not finite")
         return observation
+
+    def _approach_position(self) -> np.ndarray:
+        ball_position = self.data.xpos[self._ball_body_id]
+        goal_position = self.data.site_xpos[self._goal_line_site_id]
+        shot_direction_xy = goal_position[:2] - ball_position[:2]
+        shot_distance = np.linalg.norm(shot_direction_xy)
+        if shot_distance <= np.finfo(np.float64).eps:
+            shot_direction_xy = np.array([1.0, 0.0], dtype=np.float64)
+        else:
+            shot_direction_xy /= shot_distance
+        shot_lateral_xy = np.array(
+            [-shot_direction_xy[1], shot_direction_xy[0]],
+            dtype=np.float64,
+        )
+        approach_xy = (
+            ball_position[:2]
+            - APPROACH_DISTANCE * shot_direction_xy
+            + APPROACH_LATERAL_OFFSET * shot_lateral_xy
+        )
+        return np.array(
+            [approach_xy[0], approach_xy[1], ball_position[2]],
+            dtype=np.float64,
+        )
+
+    def _progress_distances(self) -> tuple[float, float]:
+        pelvis_xy = self.data.xpos[self.controller.pelvis_id, :2]
+        ball_xy = self.data.xpos[self._ball_body_id, :2]
+        goal_xy = self.data.site_xpos[self._goal_line_site_id, :2]
+        approach_distance = np.linalg.norm(
+            self._approach_position()[:2] - pelvis_xy
+        )
+        ball_goal_distance = np.linalg.norm(goal_xy - ball_xy)
+        return float(approach_distance), float(ball_goal_distance)
 
     def _ball_has_scored(self) -> bool:
         ball_position = self.data.xpos[self._ball_body_id]
@@ -282,14 +384,53 @@ class G1SoccerEnv(gym.Env):
     def _sample_initial_xy_positions(
         self,
         difficulty: float,
+        recovery_start: bool,
+        recovery_difficulty: float = 1.0,
     ) -> tuple[np.ndarray, np.ndarray]:
         if not 0.0 <= difficulty <= 1.0:
             raise ValueError("Initial-state difficulty must be in [0, 1]")
+        if not 0.0 <= recovery_difficulty <= 1.0:
+            raise ValueError("Recovery-state difficulty must be in [0, 1]")
 
         final_ball_xy = self.np_random.uniform(
             low=RANDOM_BALL_XY_LOW,
             high=RANDOM_BALL_XY_HIGH,
         )
+        ball_xy = FIXED_BALL_XY + difficulty * (
+            final_ball_xy - FIXED_BALL_XY
+        )
+
+        if recovery_start:
+            x_offset_range = np.asarray(EASY_RECOVERY_G1_X_OFFSET) + (
+                recovery_difficulty
+                * (
+                    np.asarray(RECOVERY_G1_X_OFFSET)
+                    - np.asarray(EASY_RECOVERY_G1_X_OFFSET)
+                )
+            )
+            lateral_distance_range = np.asarray(
+                EASY_RECOVERY_G1_LATERAL_DISTANCE
+            ) + (
+                recovery_difficulty
+                * (
+                    np.asarray(RECOVERY_G1_LATERAL_DISTANCE)
+                    - np.asarray(EASY_RECOVERY_G1_LATERAL_DISTANCE)
+                )
+            )
+            lateral_sign = self.np_random.choice((-1.0, 1.0))
+            for _ in range(100):
+                x_offset = self.np_random.uniform(*x_offset_range)
+                lateral_distance = self.np_random.uniform(
+                    *lateral_distance_range
+                )
+                offset = np.array(
+                    [x_offset, lateral_sign * lateral_distance],
+                    dtype=np.float64,
+                )
+                if np.linalg.norm(offset) >= MINIMUM_INITIAL_SEPARATION:
+                    return ball_xy + offset, ball_xy
+            raise RuntimeError("Could not sample a valid recovery start")
+
         behind_distance = self.np_random.uniform(*RANDOM_BEHIND_DISTANCE)
         lateral_offset = self.np_random.uniform(*RANDOM_LATERAL_OFFSET)
         final_g1_xy = np.array(
@@ -302,9 +443,6 @@ class G1SoccerEnv(gym.Env):
 
         g1_xy = FIXED_G1_XY + difficulty * (
             final_g1_xy - FIXED_G1_XY
-        )
-        ball_xy = FIXED_BALL_XY + difficulty * (
-            final_ball_xy - FIXED_BALL_XY
         )
         return g1_xy, ball_xy
 
@@ -319,8 +457,8 @@ class G1SoccerEnv(gym.Env):
             raise ValueError("Initial XY positions must each have shape (2,)")
         if not np.all(np.isfinite(np.concatenate([g1_xy, ball_xy]))):
             raise ValueError("Initial XY positions must be finite")
-        if g1_xy[0] >= ball_xy[0]:
-            raise ValueError("The G1 must start behind the ball")
+        if np.linalg.norm(g1_xy - ball_xy) < MINIMUM_INITIAL_SEPARATION:
+            raise ValueError("The G1 and ball initial positions are too close")
 
         self.data.qpos[
             self._g1_qpos_address : self._g1_qpos_address + 2
@@ -361,18 +499,45 @@ class G1SoccerEnv(gym.Env):
         difficulty = options.get("initial_state_difficulty")
         if difficulty is None:
             difficulty = 1.0 if self.randomize_initial_positions else 0.0
-        g1_xy, ball_xy = self._sample_initial_xy_positions(float(difficulty))
+        recovery_start_probability = float(
+            options.get(
+                "recovery_start_probability",
+                self.recovery_start_probability,
+            )
+        )
+        recovery_difficulty = float(
+            options.get("recovery_state_difficulty", 1.0)
+        )
+        if not 0.0 <= recovery_difficulty <= 1.0:
+            raise ValueError("Recovery-state difficulty must be in [0, 1]")
+        if not 0.0 <= recovery_start_probability <= 1.0:
+            raise ValueError("recovery_start_probability must be in [0, 1]")
+        if recovery_start_probability == 0.0:
+            recovery_start = False
+        elif recovery_start_probability == 1.0:
+            recovery_start = True
+        else:
+            recovery_start = bool(
+                self.np_random.random() < recovery_start_probability
+            )
+        g1_xy, ball_xy = self._sample_initial_xy_positions(
+            float(difficulty),
+            recovery_start,
+            recovery_difficulty,
+        )
         self._set_initial_xy_positions(g1_xy, ball_xy)
 
         zero_command = np.zeros(3, dtype=np.float32)
         self.controller.reset(self.data, zero_command)
+        self._last_command[:] = zero_command
         self._elapsed_steps = 0
         self._ball_contact_occurred = False
+        self._recovery_start = recovery_start
 
         settle_steps = round(SETTLE_DURATION / self.model.opt.timestep)
         goal, fell = self._advance_physics(zero_command, settle_steps)
         if goal or fell:
-            raise RuntimeError("The fixed initial state did not stabilize")
+            raise RuntimeError("The initial state did not stabilize")
         self._ball_contact_occurred = False
 
         if self.render_mode == "human":
@@ -381,27 +546,45 @@ class G1SoccerEnv(gym.Env):
             "initial_g1_xy": g1_xy.copy(),
             "initial_ball_xy": ball_xy.copy(),
             "initial_state_difficulty": float(difficulty),
+            "recovery_start": recovery_start,
+            "recovery_start_probability": recovery_start_probability,
+            "recovery_state_difficulty": recovery_difficulty,
         }
         return self._get_observation(), info
 
     def step(self, action):
+        previous_approach_distance, previous_ball_goal_distance = (
+            self._progress_distances()
+        )
         command = normalized_action_to_command(action)
         goal, fell = self._advance_physics(
             command,
             self.physics_steps_per_action,
         )
         self._elapsed_steps += 1
+        self._last_command[:] = command
 
         terminated = goal or fell
         truncated = (
             not terminated and self._elapsed_steps >= self.max_episode_steps
         )
         reward = GOAL_REWARD if goal else 0.0
+        if self.reward_mode == "approach_progress":
+            approach_distance, ball_goal_distance = (
+                self._progress_distances()
+            )
+            reward += APPROACH_PROGRESS_WEIGHT * (
+                previous_approach_distance - approach_distance
+            )
+            reward += BALL_PROGRESS_WEIGHT * (
+                previous_ball_goal_distance - ball_goal_distance
+            )
         observation = self._get_observation()
         info = {
             "goal": goal,
             "fell": fell,
             "ball_contact_occurred": self._ball_contact_occurred,
+            "recovery_start": self._recovery_start,
             "command": command.copy(),
             "elapsed_steps": self._elapsed_steps,
         }

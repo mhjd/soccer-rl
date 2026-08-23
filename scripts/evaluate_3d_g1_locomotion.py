@@ -52,7 +52,10 @@ def parse_args():
     parser.add_argument(
         "--suite",
         action="store_true",
-        help="Run fixed stand, forward, lateral, and yaw checks headlessly.",
+        help=(
+            "Run fixed stand, forward, backward, lateral, and yaw checks "
+            "headlessly."
+        ),
     )
     args = parser.parse_args()
     if args.duration <= 1.0:
@@ -181,13 +184,15 @@ def print_result(result):
 
 
 def validate_suite(results: list[RolloutResult]):
-    stand, forward, lateral, turning = results
+    stand, forward, backward, lateral, turning = results
     failures = []
 
     if stand.fell or np.linalg.norm(stand.final_displacement) >= 0.2:
         failures.append("stand: robot did not remain stable and nearly still")
     if forward.fell or forward.mean_local_velocity[0] <= 0.25:
         failures.append("forward: positive X command was not followed")
+    if backward.fell or backward.mean_local_velocity[0] >= -0.25:
+        failures.append("backward: negative X command was not followed")
     if lateral.fell or lateral.mean_local_velocity[1] <= 0.1:
         failures.append("lateral: positive Y command was not followed")
     if turning.fell or turning.yaw_change <= 0.4:
@@ -203,6 +208,7 @@ def main():
         commands = (
             np.array([0.0, 0.0, 0.0], dtype=np.float32),
             np.array([0.5, 0.0, 0.0], dtype=np.float32),
+            np.array([-0.5, 0.0, 0.0], dtype=np.float32),
             np.array([0.0, 0.3, 0.0], dtype=np.float32),
             np.array([0.5, 0.0, 0.2], dtype=np.float32),
         )

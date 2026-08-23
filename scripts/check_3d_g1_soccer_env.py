@@ -8,8 +8,11 @@ from src.soccer_3d.g1_soccer_env import (
     FIXED_BALL_XY,
     FIXED_G1_XY,
     G1SoccerEnv,
+    MINIMUM_INITIAL_SEPARATION,
     RANDOM_BALL_XY_HIGH,
     RANDOM_BALL_XY_LOW,
+    RECOVERY_G1_LATERAL_DISTANCE,
+    RECOVERY_G1_X_OFFSET,
     normalized_action_to_command,
 )
 from src.soccer_3d.g1_curriculum import G1AdaptiveStartCurriculum
@@ -54,11 +57,19 @@ def check_action_mapping():
 
 
 def check_gymnasium_contract():
-    env = G1SoccerEnv(max_episode_steps=2)
-    try:
-        check_env(env, skip_render_check=True)
-    finally:
-        env.close()
+    for observation_mode, reward_mode in (
+        ("task", "goal"),
+        ("soccer_state", "approach_progress"),
+    ):
+        env = G1SoccerEnv(
+            max_episode_steps=2,
+            observation_mode=observation_mode,
+            reward_mode=reward_mode,
+        )
+        try:
+            check_env(env, skip_render_check=True)
+        finally:
+            env.close()
 
 
 def check_control_timestep():
@@ -114,6 +125,8 @@ def check_randomized_resets():
             info_b["initial_ball_xy"],
         ):
             raise RuntimeError("Equal seeds produced different ball positions")
+        if info_a["recovery_start"] or info_b["recovery_start"]:
+            raise RuntimeError("Regular randomization produced a recovery start")
 
         sampled_positions = []
         for seed in range(20):
@@ -142,6 +155,39 @@ def check_randomized_resets():
         env.close()
 
 
+def check_recovery_resets():
+    env = G1SoccerEnv(
+        randomize_initial_positions=True,
+        recovery_start_probability=1.0,
+    )
+    try:
+        sampled_positions = []
+        for seed in range(20):
+            _, info = env.reset(seed=seed)
+            if not info["recovery_start"]:
+                raise RuntimeError("Forced recovery reset used a regular start")
+
+            g1_xy = info["initial_g1_xy"]
+            ball_xy = info["initial_ball_xy"]
+            relative_xy = g1_xy - ball_xy
+            if not RECOVERY_G1_X_OFFSET[0] <= relative_xy[0] <= (
+                RECOVERY_G1_X_OFFSET[1]
+            ):
+                raise RuntimeError("Recovery X offset is out of range")
+            if not RECOVERY_G1_LATERAL_DISTANCE[0] <= abs(
+                relative_xy[1]
+            ) <= RECOVERY_G1_LATERAL_DISTANCE[1]:
+                raise RuntimeError("Recovery lateral offset is out of range")
+            if np.linalg.norm(relative_xy) < MINIMUM_INITIAL_SEPARATION:
+                raise RuntimeError("Recovery positions are too close")
+            sampled_positions.append(np.concatenate([g1_xy, ball_xy]))
+
+        if np.allclose(sampled_positions[0], sampled_positions[1]):
+            raise RuntimeError("Different seeds produced identical recoveries")
+    finally:
+        env.close()
+
+
 def check_adaptive_curriculum():
     base_env = G1SoccerEnv(max_episode_steps=1)
     env = G1AdaptiveStartCurriculum(base_env)
@@ -159,6 +205,33 @@ def check_adaptive_curriculum():
             raise RuntimeError("Curriculum info reported wrong difficulty")
     finally:
         env.close()
+
+    recovery_base_env = G1SoccerEnv(max_episode_steps=1)
+    recovery_env = G1AdaptiveStartCurriculum(
+        recovery_base_env,
+        recovery_start_curriculum=True,
+    )
+    try:
+        recovery_env.difficulty = 0.8
+        _, reset_info = recovery_env.reset(seed=0)
+        if not np.isclose(reset_info["initial_state_difficulty"], 1.0):
+            raise RuntimeError("Recovery curriculum reduced position coverage")
+        if not np.isclose(reset_info["recovery_start_probability"], 0.4):
+            raise RuntimeError("Recovery probability did not track difficulty")
+        if not np.isclose(reset_info["recovery_state_difficulty"], 0.8):
+            raise RuntimeError("Recovery geometry did not track difficulty")
+        _, _, _, truncated, info = recovery_env.step(
+            np.zeros(3, dtype=np.float32)
+        )
+        if not truncated:
+            raise RuntimeError("Recovery curriculum check did not truncate")
+        if not np.isclose(
+            info["curriculum_recovery_start_probability"],
+            0.395,
+        ):
+            raise RuntimeError("Recovery probability did not follow update")
+    finally:
+        recovery_env.close()
 
 
 def check_scripted_goal(render: bool):
@@ -202,6 +275,7 @@ def main():
     check_control_timestep()
     check_truncation()
     check_randomized_resets()
+    check_recovery_resets()
     check_adaptive_curriculum()
     check_scripted_goal(args.render)
     print("g1 soccer environment: passed")
