@@ -3,13 +3,21 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
+from stable_baselines3.common.base_class import BaseAlgorithm
 
+from scripts.evaluate_3d_g1_geometric_controller import (
+    PilotTools,
+    initial_episode_info,
+)
 from src.soccer_3d import G1SoccerEnv
+from src.soccer_3d.g1_broad_pose import sample_broad_pose
 from src.soccer_3d.g1_soccer_env import MAX_EPISODE_STEPS, OBSERVATION_MODES
 
 
 DEFAULT_MODEL_PATH = Path("models/ppo_3d_g1_soccer_fixed.zip")
+ALGORITHM_CLASSES = {"ppo": PPO, "sac": SAC}
+CONTROLLERS = (*ALGORITHM_CLASSES, "geometric")
 STALL_WINDOW_STEPS = 30
 STALL_MAXIMUM_DISPLACEMENT = 0.2
 STALL_MAXIMUM_MEAN_SPEED = 0.08
@@ -17,12 +25,25 @@ STALL_MAXIMUM_MEAN_SPEED = 0.08
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate a high-level PPO policy on fixed-start G1 soccer.",
+        description="Evaluate a high-level policy on G1 soccer.",
     )
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument(
+        "--algorithm",
+        choices=CONTROLLERS,
+        default="ppo",
+    )
+    parser.add_argument("--model", type=Path)
     parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=100,
+        help="Print running metrics every N episodes; 0 disables progress.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--randomize-initial-positions", action="store_true")
+    parser.add_argument("--broad-initial-positions", action="store_true")
+    parser.add_argument("--aim-y-offset", type=float, default=0.25)
     parser.add_argument(
         "--observation-mode",
         choices=OBSERVATION_MODES,
@@ -51,8 +72,20 @@ def parse_args():
     args = parser.parse_args()
     if args.episodes <= 0:
         parser.error("--episodes must be positive")
-    if not args.model.exists():
-        parser.error(f"model not found: {args.model}")
+    if args.progress_every < 0:
+        parser.error("--progress-every cannot be negative")
+    if args.algorithm == "geometric":
+        if args.model is not None:
+            parser.error("--model is not used by the geometric controller")
+    else:
+        if args.model is None:
+            args.model = DEFAULT_MODEL_PATH
+        if not args.model.exists():
+            parser.error(f"model not found: {args.model}")
+    if args.randomize_initial_positions and args.broad_initial_positions:
+        parser.error(
+            "Choose either randomized behind-ball starts or broad starts"
+        )
     if not 0.0 <= args.recovery_start_probability <= 1.0:
         parser.error("--recovery-start-probability must be in [0, 1]")
     if not 0.0 <= args.recovery_state_difficulty <= 1.0:
@@ -63,15 +96,19 @@ def parse_args():
 
 
 def evaluate(
-    model: PPO,
+    model: BaseAlgorithm | None,
+    controller: str,
     episodes: int,
     seed: int,
     render: bool,
     randomize_initial_positions: bool,
+    broad_initial_positions: bool,
+    aim_y_offset: float,
     recovery_start_probability: float,
     recovery_state_difficulty: float,
     max_episode_steps: int,
     observation_mode: str,
+    progress_every: int = 0,
 ) -> dict[str, float | int]:
     env = G1SoccerEnv(
         render_mode="human" if render else None,
@@ -88,16 +125,28 @@ def evaluate(
     recovery_episodes = 0
     recovery_goals = 0
     stalled_failures = 0
+    pose_rng = np.random.default_rng(seed)
 
     try:
         for episode_index in range(episodes):
+            reset_options = {
+                "recovery_state_difficulty": recovery_state_difficulty,
+            }
+            if broad_initial_positions:
+                g1_xy, ball_xy, g1_yaw = sample_broad_pose(
+                    pose_rng,
+                    aim_y_offset,
+                )
+                reset_options.update(
+                    {
+                        "initial_g1_xy": g1_xy,
+                        "initial_ball_xy": ball_xy,
+                        "initial_g1_yaw": g1_yaw,
+                    }
+                )
             observation, reset_info = env.reset(
                 seed=seed + episode_index,
-                options={
-                    "recovery_state_difficulty": (
-                        recovery_state_difficulty
-                    )
-                },
+                options=reset_options,
             )
             recovery_start = bool(reset_info["recovery_start"])
             recovery_episodes += int(recovery_start)
@@ -107,20 +156,36 @@ def evaluate(
             episode_length = 0
             recent_motion = deque(maxlen=STALL_WINDOW_STEPS)
 
-            while not (terminated or truncated):
-                action, _ = model.predict(observation, deterministic=True)
-                observation, reward, terminated, truncated, info = env.step(
-                    action
+            if controller == "geometric":
+                pilot = PilotTools(
+                    env,
+                    observation,
+                    initial_episode_info(),
+                    verbose=False,
                 )
-                episode_reward += reward
-                episode_length += 1
-                pelvis_id = env.controller.pelvis_id
-                recent_motion.append(
-                    (
-                        env.data.xpos[pelvis_id, :2].copy(),
-                        float(np.linalg.norm(observation[4:6])),
+                _, _, info = pilot.solve()
+                terminated = bool(info["goal"] or info["fell"])
+                truncated = not terminated
+                episode_reward = float(info["goal"])
+                episode_length = int(info["elapsed_steps"])
+            else:
+                while not (terminated or truncated):
+                    action, _ = model.predict(
+                        observation,
+                        deterministic=True,
                     )
-                )
+                    observation, reward, terminated, truncated, info = (
+                        env.step(action)
+                    )
+                    episode_reward += reward
+                    episode_length += 1
+                    pelvis_id = env.controller.pelvis_id
+                    recent_motion.append(
+                        (
+                            env.data.xpos[pelvis_id, :2].copy(),
+                            float(np.linalg.norm(observation[4:6])),
+                        )
+                    )
 
             goal = bool(info["goal"])
             fell = bool(info["fell"])
@@ -141,6 +206,21 @@ def evaluate(
                 stalled_failures += int(
                     displacement < STALL_MAXIMUM_DISPLACEMENT
                     and mean_speed < STALL_MAXIMUM_MEAN_SPEED
+                )
+
+            completed_episodes = episode_index + 1
+            if (
+                progress_every
+                and completed_episodes % progress_every == 0
+                and completed_episodes < episodes
+            ):
+                print(
+                    f"Progress: {completed_episodes}/{episodes} | "
+                    f"success {goals / completed_episodes:.1%} | "
+                    f"falls {falls / completed_episodes:.1%} | "
+                    "mean length "
+                    f"{np.mean(episode_lengths):.1f}",
+                    flush=True,
                 )
     finally:
         env.close()
@@ -171,19 +251,28 @@ def evaluate(
 
 def main():
     args = parse_args()
-    model = PPO.load(args.model)
+    model = (
+        None
+        if args.algorithm == "geometric"
+        else ALGORITHM_CLASSES[args.algorithm].load(args.model)
+    )
     results = evaluate(
         model=model,
+        controller=args.algorithm,
         episodes=args.episodes,
         seed=args.seed,
         render=args.render,
         randomize_initial_positions=args.randomize_initial_positions,
+        broad_initial_positions=args.broad_initial_positions,
+        aim_y_offset=args.aim_y_offset,
         recovery_start_probability=args.recovery_start_probability,
         recovery_state_difficulty=args.recovery_state_difficulty,
         max_episode_steps=args.max_episode_steps,
         observation_mode=args.observation_mode,
+        progress_every=args.progress_every,
     )
 
+    print(f"Controller: {args.algorithm.upper()}")
     print(f"Goals: {results['goals']}/{args.episodes}")
     print(f"Success rate: {results['success_rate']:.1%}")
     print(f"Falls: {results['falls']}/{args.episodes}")
