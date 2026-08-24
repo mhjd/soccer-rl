@@ -9,6 +9,9 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from src.soccer_3d import G1SoccerEnv
+from src.soccer_3d.g1_high_level_kick_residual_env import (
+    apply_high_level_command_residual,
+)
 from src.soccer_3d.g1_soccer_env import (
     APPROACH_DISTANCE,
     APPROACH_LATERAL_OFFSET,
@@ -275,6 +278,8 @@ class PilotTools:
         verbose=False,
         recorded_actions=None,
         trace=None,
+        drive_residual_provider=None,
+        drive_command_residual_provider=None,
     ):
         self.env = env
         self.observation = observation
@@ -283,6 +288,11 @@ class PilotTools:
         self.verbose = verbose
         self.recorded_actions = recorded_actions
         self.trace = trace
+        self.drive_residual_provider = drive_residual_provider
+        self.drive_command_residual_provider = (
+            drive_command_residual_provider
+        )
+        self._drive_command_residual_active = False
         self.episode_ended = False
 
     def read_situation(self):
@@ -335,8 +345,20 @@ class PilotTools:
         ).astype(np.float32)
 
     def apply_command(self, command, steps=1):
+        command = np.asarray(command, dtype=np.float32)
+        if (
+            self._drive_command_residual_active
+            and self.drive_command_residual_provider is not None
+        ):
+            normalized_residual = self.drive_command_residual_provider(
+                command
+            )
+            command, _ = apply_high_level_command_residual(
+                command,
+                normalized_residual,
+            )
         action = self.physical_to_normalized(
-            np.asarray(command, dtype=np.float32)
+            command
         )
         for _ in range(steps):
             if self.recorded_actions is not None:
@@ -503,6 +525,43 @@ class PilotTools:
                 return False
         return abs(self.read_situation().heading_error) <= tolerance
 
+    def refine_shot_pose(
+        self,
+        position_tolerance=0.08,
+        heading_tolerance=0.12,
+        max_cycles=3,
+    ):
+        for _ in range(max_cycles):
+            situation = self.read_situation()
+            position_error = float(
+                np.linalg.norm(
+                    situation.approach_xy - situation.pelvis_xy
+                )
+            )
+            if (
+                position_error <= position_tolerance
+                and abs(situation.heading_error) <= heading_tolerance
+            ):
+                return True
+
+            if position_error > position_tolerance:
+                if not self.move_to_point(
+                    lambda current: current.approach_xy,
+                    position_tolerance=position_tolerance,
+                    max_steps=80,
+                ):
+                    return False
+
+            if not self.align_with_shot(tolerance=heading_tolerance):
+                return False
+
+        situation = self.read_situation()
+        return bool(
+            np.linalg.norm(situation.approach_xy - situation.pelvis_xy)
+            <= position_tolerance
+            and abs(situation.heading_error) <= heading_tolerance
+        )
+
     def drive_through_ball(self, max_steps=100):
         def beyond_ball(situation):
             direction = situation.goal_xy - situation.ball_xy
@@ -537,10 +596,31 @@ class PilotTools:
         if not aligned or self.info.get("goal") or self.info.get("fell"):
             return reached, aligned, self.info
         if self.trace is not None:
+            self.trace.start_phase("pose_refinement", self)
+        if self.verbose:
+            print("primitive=refine_shot_pose", flush=True)
+        aligned = self.refine_shot_pose()
+        if self.verbose:
+            self.print_summary()
+        if not aligned or self.info.get("goal") or self.info.get("fell"):
+            return reached, aligned, self.info
+        if self.trace is not None:
             self.trace.start_phase("drive_through", self)
         if self.verbose:
             print("primitive=drive_through_ball", flush=True)
-        self.drive_through_ball()
+        if self.drive_residual_provider is not None:
+            self.drive_residual_provider.reset()
+            self.env.set_leg_joint_residual_provider(
+                self.drive_residual_provider
+            )
+        if self.drive_command_residual_provider is not None:
+            self.drive_command_residual_provider.reset()
+            self._drive_command_residual_active = True
+        try:
+            self.drive_through_ball()
+        finally:
+            self.env.set_leg_joint_residual_provider(None)
+            self._drive_command_residual_active = False
         if self.verbose:
             self.print_summary()
         self.info = dict(self.info)

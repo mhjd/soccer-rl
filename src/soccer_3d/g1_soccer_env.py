@@ -138,6 +138,7 @@ class G1SoccerEnv(gym.Env):
         self.data = mujoco.MjData(self.model)
         self.controller = G1LocomotionController(self.model, policy_path)
         self.max_episode_steps = max_episode_steps
+        self.control_timestep = CONTROL_TIMESTEP
         self.render_mode = render_mode
         self.randomize_initial_positions = randomize_initial_positions
         self.recovery_start_probability = recovery_start_probability
@@ -232,6 +233,7 @@ class G1SoccerEnv(gym.Env):
         self._viewer = None
         self._last_human_render_time = None
         self._last_command = np.zeros(3, dtype=np.float32)
+        self._leg_joint_residual_provider = None
 
     def _name_id(self, object_type, name: str) -> int:
         object_id = mujoco.mj_name2id(self.model, object_type, name)
@@ -502,6 +504,9 @@ class G1SoccerEnv(gym.Env):
         for physics_step in range(physics_steps):
             if physics_step % PHYSICS_STEPS_PER_CONTROL == 0:
                 self.controller.policy_step(self.data, command)
+                if self._leg_joint_residual_provider is not None:
+                    residual = self._leg_joint_residual_provider()
+                    self.controller.apply_leg_joint_residual(residual)
 
             self.data.ctrl[:] = self.controller.torques(self.data)
             mujoco.mj_step(self.model, self.data)
@@ -519,9 +524,15 @@ class G1SoccerEnv(gym.Env):
                 break
         return goal, fell
 
+    def set_leg_joint_residual_provider(self, provider):
+        if provider is not None and not callable(provider):
+            raise TypeError("Residual provider must be callable or None")
+        self._leg_joint_residual_provider = provider
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         options = {} if options is None else dict(options)
+        self.set_leg_joint_residual_provider(None)
 
         reset_g1_for_locomotion(self.model, self.data, self.controller)
         difficulty = options.get("initial_state_difficulty")
@@ -664,7 +675,7 @@ class G1SoccerEnv(gym.Env):
         self._viewer.sync()
         now = time.perf_counter()
         if self._last_human_render_time is not None:
-            remaining = CONTROL_TIMESTEP - (
+            remaining = self.control_timestep - (
                 now - self._last_human_render_time
             )
             if remaining > 0.0:

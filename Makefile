@@ -39,7 +39,18 @@ EPISODE ?= 0
 	evaluate-g1-soccer-executable-commands \
 	inspect-g1-policy-vs-geometric \
 	evaluate-g1-geometric-broad \
-	inspect-g1-geometric-broad
+	inspect-g1-geometric-broad \
+	check-g1-kick-residual \
+	evaluate-g1-kick-challenge \
+	evaluate-g1-kick-zero-residual \
+	train-g1-kick-residual \
+	evaluate-g1-kick-residual \
+	evaluate-g1-geometric-kick-residual \
+	check-g1-high-level-kick-residual \
+	evaluate-g1-high-level-kick-zero-residual \
+	train-g1-high-level-kick-residual \
+	evaluate-g1-high-level-kick-residual \
+	evaluate-g1-geometric-combined-residuals
 
 help:
 	@echo "Available targets:"
@@ -88,6 +99,17 @@ help:
 	@echo "  make inspect-g1-policy-vs-geometric               Compare ten failed PPO starts side by side"
 	@echo "  make evaluate-g1-geometric-broad                  Measure broad geometric-controller generalization"
 	@echo "  make inspect-g1-geometric-broad EPISODE=N          Render one reproducible broad test case"
+	@echo "  make check-g1-kick-residual                       Check the low-level residual interface"
+	@echo "  make evaluate-g1-kick-challenge                   Compare low-level residuals on hard boundary cases"
+	@echo "  make evaluate-g1-kick-zero-residual               Measure the isolated contact baseline"
+	@echo "  make train-g1-kick-residual                        Train the low-level kick residual"
+	@echo "  make evaluate-g1-kick-residual                     Evaluate the learned kick residual"
+	@echo "  make evaluate-g1-geometric-kick-residual           Test the residual on geometric approaches"
+	@echo "  make check-g1-high-level-kick-residual              Check the high-level residual interface"
+	@echo "  make evaluate-g1-high-level-kick-zero-residual      Measure its isolated contact baseline"
+	@echo "  make train-g1-high-level-kick-residual               Train the high-level command residual"
+	@echo "  make evaluate-g1-high-level-kick-residual            Evaluate the learned command residual"
+	@echo "  make evaluate-g1-geometric-combined-residuals        Test both residual levels together"
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -379,3 +401,65 @@ inspect-g1-geometric-broad:
 		-m scripts.inspect_3d_g1_geometric_generalization \
 		--seed $(SEED) \
 		--episode $(EPISODE)
+
+check-g1-kick-residual:
+	$(LOCOMOTION_PYTHON) -m scripts.check_3d_g1_residual_interface
+
+evaluate-g1-kick-challenge:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_kick_challenge \
+		--gait-timings 101 \
+		--seed $(SEED)
+
+evaluate-g1-kick-zero-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_kick_residual \
+		--seed $(SEED) \
+		--episodes 1000
+
+train-g1-kick-residual:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_kick_residual
+
+evaluate-g1-kick-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_kick_residual \
+		--model models/ppo_3d_g1_kick_residual.zip \
+		--seed $(SEED) \
+		--episodes 1000
+
+evaluate-g1-geometric-kick-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_geometric_generalization \
+		--residual-model models/ppo_3d_g1_kick_residual_100k.zip \
+		--seed $(SEED) \
+		--episodes 100 \
+		--report-json /tmp/soccer-rl-g1-residual-seed$(SEED).json
+
+check-g1-high-level-kick-residual:
+	$(LOCOMOTION_PYTHON) -m scripts.check_3d_g1_high_level_residual
+
+evaluate-g1-high-level-kick-zero-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_high_level_kick_residual \
+		--seed $(SEED) \
+		--episodes 1000
+
+train-g1-high-level-kick-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.train_3d_g1_high_level_kick_residual
+
+evaluate-g1-high-level-kick-residual:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_high_level_kick_residual \
+		--model models/ppo_3d_g1_high_level_kick_residual.zip \
+		--seed $(SEED) \
+		--episodes 1000
+
+evaluate-g1-geometric-combined-residuals:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.evaluate_3d_g1_geometric_generalization \
+		--residual-model models/ppo_3d_g1_kick_residual.zip \
+		--high-level-residual-model models/ppo_3d_g1_high_level_kick_residual.zip \
+		--seed $(SEED) \
+		--episodes 100 \
+		--report-json /tmp/soccer-rl-g1-combined-residuals-seed$(SEED).json

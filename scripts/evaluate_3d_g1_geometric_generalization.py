@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from stable_baselines3 import PPO
 
 from scripts.evaluate_3d_g1_geometric_controller import (
     GeometricTrace,
@@ -11,22 +12,78 @@ from scripts.evaluate_3d_g1_geometric_controller import (
     initial_episode_info,
 )
 from src.soccer_3d import G1SoccerEnv
-from src.soccer_3d.g1_soccer_env import (
-    APPROACH_DISTANCE,
-    APPROACH_LATERAL_OFFSET,
+from src.soccer_3d.g1_broad_pose import (
+    BALL_RADIUS,
+    GOAL_HALF_WIDTH,
+    GOAL_XY,
+    position_category,
+    sample_broad_pose,
+)
+from src.soccer_3d.g1_kick_residual_env import (
+    RESIDUAL_OBSERVATION_SIZE,
+    get_leg_residual_observation,
+)
+from src.soccer_3d.g1_high_level_kick_residual_env import (
+    HIGH_LEVEL_RESIDUAL_OBSERVATION_SIZE,
+    get_high_level_residual_observation,
+)
+from src.soccer_3d.g1_locomotion import (
+    LEG_JOINT_COUNT,
+    MAX_LEG_JOINT_RESIDUAL,
 )
 
 
-BALL_XY_LOW = np.array([0.1, -1.2])
-BALL_XY_HIGH = np.array([2.2, 1.2])
-G1_XY_LOW = np.array([-0.55, -1.5])
-G1_XY_HIGH = np.array([2.5, 1.5])
-APPROACH_XY_LOW = np.array([-0.65, -1.55])
-APPROACH_XY_HIGH = np.array([2.55, 1.55])
-MINIMUM_G1_BALL_DISTANCE = 0.7
-GOAL_XY = np.array([3.2, 0.0])
-GOAL_HALF_WIDTH = 0.9
-BALL_RADIUS = 0.11
+class LearnedDriveResidual:
+    def __init__(self, env, model):
+        if model.observation_space.shape != (RESIDUAL_OBSERVATION_SIZE,):
+            raise ValueError("Residual model has an unexpected observation shape")
+        if model.action_space.shape != (LEG_JOINT_COUNT,):
+            raise ValueError("Residual model has an unexpected action shape")
+        self.env = env
+        self.model = model
+        self.last_action = np.zeros(LEG_JOINT_COUNT, dtype=np.float32)
+
+    def reset(self):
+        self.last_action.fill(0.0)
+
+    def __call__(self):
+        observation = get_leg_residual_observation(
+            self.env,
+            self.last_action,
+        )
+        action, _ = self.model.predict(observation, deterministic=True)
+        self.last_action[:] = np.clip(action, -1.0, 1.0)
+        return MAX_LEG_JOINT_RESIDUAL * self.last_action
+
+
+class LearnedHighLevelDriveResidual:
+    def __init__(self, env, model):
+        if model.observation_space.shape != (
+            HIGH_LEVEL_RESIDUAL_OBSERVATION_SIZE,
+        ):
+            raise ValueError(
+                "High-level residual model has an unexpected observation shape"
+            )
+        if model.action_space.shape != (3,):
+            raise ValueError(
+                "High-level residual model has an unexpected action shape"
+            )
+        self.env = env
+        self.model = model
+        self.last_action = np.zeros(3, dtype=np.float32)
+
+    def reset(self):
+        self.last_action.fill(0.0)
+
+    def __call__(self, base_command):
+        observation = get_high_level_residual_observation(
+            self.env,
+            base_command,
+            self.last_action,
+        )
+        action, _ = self.model.predict(observation, deterministic=True)
+        self.last_action[:] = np.clip(action, -1.0, 1.0)
+        return self.last_action.copy()
 
 
 def parse_args():
@@ -41,55 +98,22 @@ def parse_args():
     parser.add_argument("--aim-y-offset", type=float, default=0.25)
     parser.add_argument("--max-episode-steps", type=int, default=500)
     parser.add_argument("--report-json", type=Path)
+    parser.add_argument("--residual-model", type=Path)
+    parser.add_argument("--high-level-residual-model", type=Path)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     if args.episodes <= 0:
         parser.error("--episodes must be positive")
     if args.max_episode_steps <= 0:
         parser.error("--max-episode-steps must be positive")
+    if args.residual_model is not None and not args.residual_model.exists():
+        parser.error(f"model not found: {args.residual_model}")
+    if (
+        args.high_level_residual_model is not None
+        and not args.high_level_residual_model.exists()
+    ):
+        parser.error(f"model not found: {args.high_level_residual_model}")
     return args
-
-
-def approach_point(ball_xy, aim_y_offset):
-    aim_xy = GOAL_XY + np.array([0.0, aim_y_offset])
-    shot_direction = aim_xy - ball_xy
-    shot_direction /= np.linalg.norm(shot_direction)
-    shot_lateral = np.array([-shot_direction[1], shot_direction[0]])
-    return (
-        ball_xy
-        - APPROACH_DISTANCE * shot_direction
-        + APPROACH_LATERAL_OFFSET * shot_lateral
-    )
-
-
-def sample_broad_pose(rng, aim_y_offset):
-    for _ in range(1000):
-        ball_xy = rng.uniform(BALL_XY_LOW, BALL_XY_HIGH)
-        target_xy = approach_point(ball_xy, aim_y_offset)
-        if np.any(target_xy < APPROACH_XY_LOW) or np.any(
-            target_xy > APPROACH_XY_HIGH
-        ):
-            continue
-
-        g1_xy = rng.uniform(G1_XY_LOW, G1_XY_HIGH)
-        if np.linalg.norm(g1_xy - ball_xy) < MINIMUM_G1_BALL_DISTANCE:
-            continue
-
-        g1_yaw = rng.uniform(-np.pi, np.pi)
-        return g1_xy, ball_xy, g1_yaw
-    raise RuntimeError("Could not sample a broad valid initial pose")
-
-
-def position_category(g1_xy, ball_xy, aim_y_offset):
-    aim_xy = GOAL_XY + np.array([0.0, aim_y_offset])
-    shot_direction = aim_xy - ball_xy
-    shot_direction /= np.linalg.norm(shot_direction)
-    along_shot_axis = float(np.dot(g1_xy - ball_xy, shot_direction))
-    if along_shot_axis < -0.25:
-        return "behind_ball"
-    if along_shot_axis > 0.25:
-        return "ahead_of_ball"
-    return "beside_ball"
 
 
 def failure_reason(reached, aligned, info):
@@ -273,6 +297,7 @@ def episode_diagnostics(
             "detour",
             "approach",
             "alignment",
+            "pose_refinement",
             "drive_through",
         ):
             metrics = phase_metrics(trace, phase, attempt=attempt)
@@ -347,6 +372,16 @@ def episode_diagnostics(
 
 def main():
     args = parse_args()
+    residual_model = (
+        PPO.load(args.residual_model)
+        if args.residual_model is not None
+        else None
+    )
+    high_level_residual_model = (
+        PPO.load(args.high_level_residual_model)
+        if args.high_level_residual_model is not None
+        else None
+    )
     rng = np.random.default_rng(args.seed)
     env = G1SoccerEnv(
         render_mode=None,
@@ -392,6 +427,19 @@ def main():
                 aim_y_offset=args.aim_y_offset,
                 verbose=False,
                 trace=trace,
+                drive_residual_provider=(
+                    LearnedDriveResidual(env, residual_model)
+                    if residual_model is not None
+                    else None
+                ),
+                drive_command_residual_provider=(
+                    LearnedHighLevelDriveResidual(
+                        env,
+                        high_level_residual_model,
+                    )
+                    if high_level_residual_model is not None
+                    else None
+                ),
             )
             reached, aligned, info = pilot.solve()
             goal = bool(info["goal"])
@@ -480,6 +528,16 @@ def main():
             "episodes": args.episodes,
             "aim_y_offset": args.aim_y_offset,
             "max_episode_steps": args.max_episode_steps,
+            "residual_model": (
+                str(args.residual_model)
+                if args.residual_model is not None
+                else None
+            ),
+            "high_level_residual_model": (
+                str(args.high_level_residual_model)
+                if args.high_level_residual_model is not None
+                else None
+            ),
             "success_rate": goals / args.episodes,
             "signatures": dict(signatures),
             "episode_diagnostics": diagnostic_episodes,

@@ -224,6 +224,8 @@ EFFORT_LIMIT_HARDWARE = np.array(
 
 COMMAND_LOW = np.array([-0.5, -0.3, -0.2], dtype=np.float32)
 COMMAND_HIGH = np.array([1.0, 0.3, 0.2], dtype=np.float32)
+LEG_JOINT_COUNT = 12
+MAX_LEG_JOINT_RESIDUAL = 0.1
 
 OBSERVATION_TERMS = (
     "base_ang_vel",
@@ -256,6 +258,9 @@ class G1LocomotionController:
         self._validate_policy_contract()
 
         self.last_action = np.zeros(29, dtype=np.float32)
+        self.base_target_joint_position_hardware = (
+            DEFAULT_JOINT_POSITION_HARDWARE.copy()
+        )
         self.target_joint_position_hardware = (
             DEFAULT_JOINT_POSITION_HARDWARE.copy()
         )
@@ -360,6 +365,9 @@ class G1LocomotionController:
     def reset(self, data: mujoco.MjData, command: np.ndarray):
         command = self._validated_command(command)
         self.last_action.fill(0.0)
+        self.base_target_joint_position_hardware[:] = (
+            DEFAULT_JOINT_POSITION_HARDWARE
+        )
         self.target_joint_position_hardware[:] = (
             DEFAULT_JOINT_POSITION_HARDWARE
         )
@@ -377,8 +385,12 @@ class G1LocomotionController:
         self,
         data: mujoco.MjData,
         command: np.ndarray,
+        leg_joint_residual: np.ndarray | None = None,
     ) -> np.ndarray:
         command = self._validated_command(command)
+        leg_joint_residual = self._validated_leg_joint_residual(
+            leg_joint_residual
+        )
         terms = self._observation_terms(data, command)
         for name in OBSERVATION_TERMS:
             self._history[name].append(terms[name])
@@ -398,10 +410,25 @@ class G1LocomotionController:
         target_policy = (
             DEFAULT_JOINT_POSITION_POLICY + ACTION_SCALE * action
         )
-        self.target_joint_position_hardware[:] = policy_to_hardware(
+        self.base_target_joint_position_hardware[:] = policy_to_hardware(
             target_policy
         )
+        self.target_joint_position_hardware[:] = (
+            self.base_target_joint_position_hardware
+        )
+        self.apply_leg_joint_residual(leg_joint_residual)
         return action.copy()
+
+    def apply_leg_joint_residual(
+        self,
+        leg_joint_residual: np.ndarray | None,
+    ):
+        leg_joint_residual = self._validated_leg_joint_residual(
+            leg_joint_residual
+        )
+        self.target_joint_position_hardware[:LEG_JOINT_COUNT] += (
+            leg_joint_residual
+        )
 
     def torques(self, data: mujoco.MjData) -> np.ndarray:
         joint_position = data.qpos[self.joint_qpos_addresses]
@@ -468,6 +495,27 @@ class G1LocomotionController:
                 f"[{COMMAND_LOW}, {COMMAND_HIGH}]"
             )
         return command
+
+    @staticmethod
+    def _validated_leg_joint_residual(
+        residual: np.ndarray | None,
+    ) -> np.ndarray:
+        if residual is None:
+            return np.zeros(LEG_JOINT_COUNT, dtype=np.float32)
+        residual = np.asarray(residual, dtype=np.float32)
+        if residual.shape != (LEG_JOINT_COUNT,):
+            raise ValueError(
+                "Leg joint residual must have shape "
+                f"({LEG_JOINT_COUNT},)"
+            )
+        if not np.all(np.isfinite(residual)):
+            raise ValueError("Leg joint residual values must be finite")
+        if np.any(np.abs(residual) > MAX_LEG_JOINT_RESIDUAL):
+            raise ValueError(
+                "Leg joint residual exceeds the maximum magnitude "
+                f"of {MAX_LEG_JOINT_RESIDUAL} rad"
+            )
+        return residual
 
 
 def reset_g1_for_locomotion(
