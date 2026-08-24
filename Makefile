@@ -37,11 +37,13 @@ MODEL_LABEL ?= benchmark
 	train-g1-soccer-policy evaluate-g1-soccer-policy \
 	train-g1-soccer-algorithm-benchmark \
 	train-g1-soccer-sac-goal-only \
+	train-g1-soccer-sac-broad-curriculum \
 	evaluate-g1-soccer-algorithm-benchmark \
 	evaluate-g1-soccer-sac-goal-only \
 	evaluate-g1-soccer-geometric-benchmark \
 	evaluate-g1-soccer-broad-algorithm-benchmark \
 	evaluate-g1-soccer-sac-goal-only-broad \
+	evaluate-g1-soccer-sac-broad-curriculum \
 	evaluate-g1-soccer-broad-geometric-benchmark \
 	train-g1-soccer-curriculum evaluate-g1-soccer-randomized-policy \
 	train-g1-soccer-recovery evaluate-g1-soccer-recovery \
@@ -102,11 +104,13 @@ help:
 	@echo "  make evaluate-g1-soccer-policy                   Render the learned high-level policy"
 	@echo "  make train-g1-soccer-algorithm-benchmark         Train PPO or SAC on the shared benchmark"
 	@echo "  make train-g1-soccer-sac-goal-only               Train the sparse-reward SAC benchmark"
+	@echo "  make train-g1-soccer-sac-broad-curriculum        Expand sparse-reward SAC toward broad starts"
 	@echo "  make evaluate-g1-soccer-algorithm-benchmark      Evaluate one benchmark model"
 	@echo "  make evaluate-g1-soccer-sac-goal-only            Evaluate sparse-reward SAC"
 	@echo "  make evaluate-g1-soccer-geometric-benchmark      Evaluate the geometric reference on the benchmark"
 	@echo "  make evaluate-g1-soccer-broad-algorithm-benchmark Evaluate a learned policy on broad hard starts"
 	@echo "  make evaluate-g1-soccer-sac-goal-only-broad      Evaluate sparse-reward SAC on broad starts"
+	@echo "  make evaluate-g1-soccer-sac-broad-curriculum     Evaluate curriculum SAC on broad starts"
 	@echo "  make evaluate-g1-soccer-broad-geometric-benchmark Evaluate geometric control on broad hard starts"
 	@echo "  make train-g1-soccer-curriculum                  Continue training with adaptive random starts"
 	@echo "  make evaluate-g1-soccer-randomized-policy        Render randomized learned-policy episodes"
@@ -328,6 +332,19 @@ train-g1-soccer-sac-goal-only:
 	$(MAKE) train-g1-soccer-algorithm-benchmark \
 		ALGORITHM=sac REWARD_MODE=goal MODEL_LABEL=goal_only
 
+train-g1-soccer-sac-broad-curriculum:
+	$(LOCOMOTION_PYTHON) -m scripts.train_3d_g1_soccer \
+		--algorithm sac \
+		--timesteps $(TIMESTEPS) \
+		--seed $(SEED) \
+		--resume models/sac_3d_g1_soccer_goal_only_seed$(SEED).zip \
+		--broad-curriculum \
+		--observation-mode soccer_state \
+		--reward-mode goal \
+		--max-episode-steps 500 \
+		--checkpoint-frequency 20000 \
+		--output models/sac_3d_g1_soccer_broad_curriculum_seed$(SEED).zip
+
 evaluate-g1-soccer-algorithm-benchmark:
 	$(LOCOMOTION_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \
 		--algorithm $(ALGORITHM) \
@@ -364,6 +381,10 @@ evaluate-g1-soccer-broad-algorithm-benchmark:
 evaluate-g1-soccer-sac-goal-only-broad:
 	$(MAKE) evaluate-g1-soccer-broad-algorithm-benchmark \
 		ALGORITHM=sac MODEL_LABEL=goal_only
+
+evaluate-g1-soccer-sac-broad-curriculum:
+	$(MAKE) evaluate-g1-soccer-broad-algorithm-benchmark \
+		ALGORITHM=sac MODEL_LABEL=broad_curriculum
 
 evaluate-g1-soccer-broad-geometric-benchmark:
 	$(LOCOMOTION_PYTHON) -m scripts.evaluate_3d_g1_soccer_policy \

@@ -4,7 +4,11 @@ from pathlib import Path
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from src.soccer_3d import G1AdaptiveStartCurriculum, G1SoccerEnv
+from src.soccer_3d import (
+    G1AdaptiveBroadCurriculum,
+    G1AdaptiveStartCurriculum,
+    G1SoccerEnv,
+)
 from src.soccer_3d.g1_soccer_env import (
     MAX_EPISODE_STEPS,
     OBSERVATION_MODES,
@@ -68,6 +72,7 @@ def parse_args():
     parser.add_argument("--randomize-initial-positions", action="store_true")
     parser.add_argument("--adaptive-curriculum", action="store_true")
     parser.add_argument("--recovery-curriculum", action="store_true")
+    parser.add_argument("--broad-curriculum", action="store_true")
     parser.add_argument(
         "--initial-curriculum-difficulty",
         type=float,
@@ -102,7 +107,14 @@ def parse_args():
         parser.error("--target-kl is a PPO-only option")
     if args.transfer_from is not None and args.observation_mode == "task":
         parser.error("--transfer-from requires an expanded observation mode")
-    if args.adaptive_curriculum and args.recovery_curriculum:
+    curriculum_modes = sum(
+        (
+            args.adaptive_curriculum,
+            args.recovery_curriculum,
+            args.broad_curriculum,
+        )
+    )
+    if curriculum_modes > 1:
         parser.error("Choose only one curriculum mode")
     if args.max_episode_steps <= 0:
         parser.error("--max-episode-steps must be positive")
@@ -192,6 +204,7 @@ def train(
     reward_mode: str,
     adaptive_curriculum: bool,
     recovery_curriculum: bool,
+    broad_curriculum: bool,
     initial_curriculum_difficulty: float,
     max_episode_steps: int,
     randomize_initial_positions: bool,
@@ -207,15 +220,19 @@ def train(
         observation_mode=observation_mode,
         reward_mode=reward_mode,
     )
-    env = (
-        G1AdaptiveStartCurriculum(
+    if broad_curriculum:
+        env = G1AdaptiveBroadCurriculum(
+            base_env,
+            initial_difficulty=initial_curriculum_difficulty,
+        )
+    elif adaptive_curriculum or recovery_curriculum:
+        env = G1AdaptiveStartCurriculum(
             base_env,
             recovery_start_curriculum=recovery_curriculum,
             initial_difficulty=initial_curriculum_difficulty,
         )
-        if adaptive_curriculum or recovery_curriculum
-        else base_env
-    )
+    else:
+        env = base_env
     try:
         if transfer_path is not None:
             model = create_transferred_model(
@@ -298,7 +315,7 @@ def train(
             )
             model.save_replay_buffer(replay_buffer_path)
             print(f"Saved replay buffer to {replay_buffer_path}")
-        if adaptive_curriculum or recovery_curriculum:
+        if adaptive_curriculum or recovery_curriculum or broad_curriculum:
             print(
                 "Curriculum finished at difficulty "
                 f"{env.difficulty:.3f} after {env.completed_episodes} "
@@ -319,6 +336,8 @@ def main():
     args = parse_args()
     if args.recovery_curriculum:
         start_mode = "recovery curriculum"
+    elif args.broad_curriculum:
+        start_mode = "broad-position curriculum"
     elif args.adaptive_curriculum:
         start_mode = "adaptive position curriculum"
     elif args.randomize_initial_positions:
@@ -348,6 +367,7 @@ def main():
         reward_mode=args.reward_mode,
         adaptive_curriculum=args.adaptive_curriculum,
         recovery_curriculum=args.recovery_curriculum,
+        broad_curriculum=args.broad_curriculum,
         initial_curriculum_difficulty=(
             args.initial_curriculum_difficulty
         ),

@@ -1,10 +1,17 @@
+from collections import deque
+
 import gymnasium as gym
 import numpy as np
+
+from src.soccer_3d.g1_broad_pose import sample_interpolated_pose
 
 
 TARGET_SUCCESS_RATE = 0.5
 DIFFICULTY_STEP = 0.02
 MAX_RECOVERY_START_PROBABILITY = 0.5
+BROAD_TARGET_SUCCESS_RATE = 0.7
+BROAD_DIFFICULTY_STEP = 0.005
+BROAD_PROGRESS_EPISODES = 100
 
 
 class G1AdaptiveStartCurriculum(gym.Wrapper):
@@ -103,4 +110,72 @@ class G1AdaptiveStartCurriculum(gym.Wrapper):
         info["curriculum_recovery_success_rate"] = (
             self.recovery_success_rate
         )
+        return observation, reward, terminated, truncated, info
+
+
+class G1AdaptiveBroadCurriculum(G1AdaptiveStartCurriculum):
+    """Expand mastered behind-ball starts continuously into broad starts."""
+
+    def __init__(
+        self,
+        env,
+        target_success_rate: float = BROAD_TARGET_SUCCESS_RATE,
+        difficulty_step: float = BROAD_DIFFICULTY_STEP,
+        initial_difficulty: float = 0.0,
+        aim_y_offset: float = 0.25,
+        progress_episodes: int = BROAD_PROGRESS_EPISODES,
+    ):
+        super().__init__(
+            env,
+            target_success_rate=target_success_rate,
+            difficulty_step=difficulty_step,
+            initial_difficulty=initial_difficulty,
+        )
+        if progress_episodes <= 0:
+            raise ValueError("progress_episodes must be positive")
+        self.aim_y_offset = aim_y_offset
+        self.progress_episodes = progress_episodes
+        self._pose_rng = np.random.default_rng()
+        self._recent_results = deque(maxlen=progress_episodes)
+
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            self._pose_rng = np.random.default_rng(seed)
+        reset_options = {} if options is None else dict(options)
+        explicit_g1_xy = reset_options.get("initial_g1_xy")
+        explicit_ball_xy = reset_options.get("initial_ball_xy")
+        if explicit_g1_xy is None and explicit_ball_xy is None:
+            g1_xy, ball_xy, g1_yaw = sample_interpolated_pose(
+                self._pose_rng,
+                self.difficulty,
+                self.aim_y_offset,
+            )
+            reset_options.update(
+                initial_g1_xy=g1_xy,
+                initial_ball_xy=ball_xy,
+                initial_g1_yaw=g1_yaw,
+            )
+        reset_options["initial_state_difficulty"] = self.difficulty
+        reset_options["recovery_start_probability"] = 0.0
+        observation, info = self.env.reset(seed=seed, options=reset_options)
+        self._current_recovery_start = False
+        info["broad_curriculum_difficulty"] = self.difficulty
+        return observation, info
+
+    def step(self, action):
+        result = super().step(action)
+        observation, reward, terminated, truncated, info = result
+        if terminated or truncated:
+            self._recent_results.append(float(info["goal"]))
+            if self.completed_episodes % self.progress_episodes == 0:
+                recent_success_rate = float(np.mean(self._recent_results))
+                print(
+                    "Broad curriculum: "
+                    f"episodes={self.completed_episodes}, "
+                    f"difficulty={self.difficulty:.3f}, "
+                    f"recent_success={recent_success_rate:.1%}, "
+                    f"total_success={self.success_rate:.1%}",
+                    flush=True,
+                )
+        info["broad_curriculum_difficulty"] = self.difficulty
         return observation, reward, terminated, truncated, info

@@ -3,6 +3,11 @@ import numpy as np
 from src.soccer_3d.g1_soccer_env import (
     APPROACH_DISTANCE,
     APPROACH_LATERAL_OFFSET,
+    MINIMUM_INITIAL_SEPARATION,
+    RANDOM_BALL_XY_HIGH,
+    RANDOM_BALL_XY_LOW,
+    RANDOM_BEHIND_DISTANCE,
+    RANDOM_LATERAL_OFFSET,
 )
 
 
@@ -46,6 +51,47 @@ def sample_broad_pose(rng, aim_y_offset):
         g1_yaw = rng.uniform(-np.pi, np.pi)
         return g1_xy, ball_xy, g1_yaw
     raise RuntimeError("Could not sample a broad valid initial pose")
+
+
+def sample_behind_ball_pose(rng):
+    """Sample the full behind-ball distribution used by the learned policy."""
+    ball_xy = rng.uniform(RANDOM_BALL_XY_LOW, RANDOM_BALL_XY_HIGH)
+    behind_distance = rng.uniform(*RANDOM_BEHIND_DISTANCE)
+    lateral_offset = rng.uniform(*RANDOM_LATERAL_OFFSET)
+    g1_xy = np.array(
+        [ball_xy[0] - behind_distance, ball_xy[1] + lateral_offset]
+    )
+    return g1_xy, ball_xy, 0.0
+
+
+def interpolate_pose(behind_pose, broad_pose, difficulty):
+    """Interpolate one easy pose toward one broad pose."""
+    if not 0.0 <= difficulty <= 1.0:
+        raise ValueError("difficulty must be in [0, 1]")
+    behind_g1_xy, behind_ball_xy, behind_yaw = behind_pose
+    broad_g1_xy, broad_ball_xy, broad_yaw = broad_pose
+    g1_xy = np.asarray(behind_g1_xy) + difficulty * (
+        np.asarray(broad_g1_xy) - np.asarray(behind_g1_xy)
+    )
+    ball_xy = np.asarray(behind_ball_xy) + difficulty * (
+        np.asarray(broad_ball_xy) - np.asarray(behind_ball_xy)
+    )
+    g1_yaw = behind_yaw + difficulty * (broad_yaw - behind_yaw)
+    return g1_xy, ball_xy, float(g1_yaw)
+
+
+def sample_interpolated_pose(rng, difficulty, aim_y_offset):
+    """Continuously expand behind-ball starts into the broad distribution."""
+    for _ in range(1000):
+        pose = interpolate_pose(
+            sample_behind_ball_pose(rng),
+            sample_broad_pose(rng, aim_y_offset),
+            difficulty,
+        )
+        g1_xy, ball_xy, _ = pose
+        if np.linalg.norm(g1_xy - ball_xy) >= MINIMUM_INITIAL_SEPARATION:
+            return pose
+    raise RuntimeError("Could not interpolate a valid initial pose")
 
 
 def position_category(g1_xy, ball_xy, aim_y_offset):

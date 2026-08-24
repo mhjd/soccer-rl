@@ -16,7 +16,11 @@ from src.soccer_3d.g1_soccer_env import (
     RECOVERY_G1_X_OFFSET,
     normalized_action_to_command,
 )
-from src.soccer_3d.g1_curriculum import G1AdaptiveStartCurriculum
+from src.soccer_3d.g1_broad_pose import interpolate_pose
+from src.soccer_3d.g1_curriculum import (
+    G1AdaptiveBroadCurriculum,
+    G1AdaptiveStartCurriculum,
+)
 
 
 def parse_args():
@@ -287,6 +291,49 @@ def check_adaptive_curriculum():
         recovery_env.close()
 
 
+def check_broad_curriculum():
+    behind_pose = (np.array([0.0, 0.0]), np.array([1.0, 0.0]), 0.0)
+    broad_pose = (np.array([2.0, 2.0]), np.array([3.0, 2.0]), np.pi)
+    midpoint = interpolate_pose(behind_pose, broad_pose, 0.5)
+    if not np.allclose(midpoint[0], [1.0, 1.0]):
+        raise RuntimeError("Broad curriculum did not interpolate G1 XY")
+    if not np.allclose(midpoint[1], [2.0, 1.0]):
+        raise RuntimeError("Broad curriculum did not interpolate ball XY")
+    if not np.isclose(midpoint[2], np.pi / 2):
+        raise RuntimeError("Broad curriculum did not interpolate yaw")
+
+    base_env = G1SoccerEnv(max_episode_steps=1)
+    env = G1AdaptiveBroadCurriculum(base_env)
+    try:
+        _, info_a = env.reset(seed=123)
+        _, info_b = env.reset(seed=123)
+        for key in ("initial_g1_xy", "initial_ball_xy"):
+            if not np.allclose(info_a[key], info_b[key]):
+                raise RuntimeError("Broad curriculum reset is not reproducible")
+        if not np.isclose(info_a["initial_g1_yaw"], 0.0):
+            raise RuntimeError("Difficulty zero introduced initial yaw")
+        if info_a["initial_g1_xy"][0] >= info_a["initial_ball_xy"][0]:
+            raise RuntimeError("Difficulty zero did not start behind the ball")
+
+        env.difficulty = 0.5
+        env.reset(seed=0)
+        _, _, terminated, truncated, info = env.step(
+            np.zeros(3, dtype=np.float32)
+        )
+        if terminated or not truncated:
+            raise RuntimeError("Broad curriculum failure check did not truncate")
+        expected_difficulty = 0.5 - 0.005 * 0.7
+        if not np.isclose(env.difficulty, expected_difficulty):
+            raise RuntimeError("Broad curriculum used the wrong update")
+        if not np.isclose(
+            info["broad_curriculum_difficulty"],
+            expected_difficulty,
+        ):
+            raise RuntimeError("Broad curriculum info is inconsistent")
+    finally:
+        env.close()
+
+
 def check_scripted_goal(render: bool):
     env = G1SoccerEnv(
         max_episode_steps=100,
@@ -331,6 +378,7 @@ def main():
     check_recovery_resets()
     check_explicit_initial_pose()
     check_adaptive_curriculum()
+    check_broad_curriculum()
     check_scripted_goal(args.render)
     print("g1 soccer environment: passed")
 

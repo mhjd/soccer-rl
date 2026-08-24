@@ -3,6 +3,7 @@
 __all__ = [
     "AdaptiveStartCurriculum",
     "CylinderSoccerEnv",
+    "G1AdaptiveBroadCurriculum",
     "G1AdaptiveStartCurriculum",
     "G1HighLevelKickResidualEnv",
     "G1GeometricResidualEnv",
@@ -43,4 +44,8 @@ def __getattr__(name):
         from .g1_curriculum import G1AdaptiveStartCurriculum
 
         return G1AdaptiveStartCurriculum
+    if name == "G1AdaptiveBroadCurriculum":
+        from .g1_curriculum import G1AdaptiveBroadCurriculum
+
+        return G1AdaptiveBroadCurriculum
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
