@@ -28,6 +28,7 @@ DEFAULT_POSTER_PATH = (
 INTRO_DURATION = 4.0
 LIVE_OUTRO_DURATION = 1.4
 FROZEN_OUTRO_DURATION = 0.8
+CAMERA_RESPONSE = 7.0
 
 
 def smoothstep(value: float) -> float:
@@ -154,6 +155,8 @@ class CinematicRenderer:
         self.poster_path = poster_path
         self.poster_frame = None
         self.frame_count = 0
+        self.camera_state = None
+        self.camera_velocity = np.zeros(6, dtype=np.float64)
 
     def _scene_points(self):
         pelvis = self.env.data.xpos[self.env.controller.pelvis_id].copy()
@@ -161,40 +164,81 @@ class CinematicRenderer:
         goal = self.env.data.site_xpos[self.env._goal_line_site_id].copy()
         return pelvis, ball, goal
 
+    def _follow_camera_target(
+        self,
+        lookat: np.ndarray,
+        distance: float,
+        azimuth: float,
+        elevation: float,
+    ):
+        target = np.concatenate(
+            [lookat, np.array([distance, azimuth, elevation])]
+        )
+        if self.camera_state is None:
+            self.camera_state = target.copy()
+        else:
+            timestep = 1.0 / self.fps
+            omega_squared = CAMERA_RESPONSE * CAMERA_RESPONSE
+            damping = 1.0 + 2.0 * timestep * CAMERA_RESPONSE
+            target_weight = timestep * timestep * omega_squared
+            inverse_determinant = 1.0 / (damping + target_weight)
+            previous_state = self.camera_state
+            self.camera_state = (
+                damping * previous_state
+                + timestep * self.camera_velocity
+                + target_weight * target
+            ) * inverse_determinant
+            self.camera_velocity = (
+                self.camera_velocity
+                + timestep * omega_squared * (target - previous_state)
+            ) * inverse_determinant
+
+        self.camera.lookat[:] = self.camera_state[:3]
+        self.camera.distance = float(self.camera_state[3])
+        self.camera.azimuth = float(self.camera_state[4])
+        self.camera.elevation = float(self.camera_state[5])
+
     def _set_intro_camera(self, elapsed: float):
         pelvis, ball, goal = self._scene_points()
         pullback = smoothstep((elapsed - 0.55) / (INTRO_DURATION - 0.55))
         close_target = ball + np.array([0.0, 0.0, 0.025])
         wide_target = 0.35 * pelvis + 0.40 * ball + 0.25 * goal
         wide_target[2] = 0.55
-        self.camera.lookat[:] = interpolate(
+        lookat = interpolate(
             close_target,
             wide_target,
             pullback,
         )
-        self.camera.distance = float(interpolate(0.48, 4.45, pullback))
-        self.camera.azimuth = float(interpolate(142.0, 128.0, pullback))
-        self.camera.elevation = float(interpolate(-7.0, -16.0, pullback))
+        self._follow_camera_target(
+            lookat,
+            float(interpolate(0.48, 4.45, pullback)),
+            float(interpolate(142.0, 128.0, pullback)),
+            float(interpolate(-12.0, -16.0, pullback)),
+        )
 
     def _set_action_camera(self, elapsed: float, expected_duration: float):
         pelvis, ball, goal = self._scene_points()
         progress = smoothstep(elapsed / max(expected_duration, 1e-6))
         target = 0.30 * pelvis + 0.45 * ball + 0.25 * goal
         target[2] = 0.58
-        self.camera.lookat[:] = target
-        self.camera.distance = float(interpolate(4.45, 4.1, progress))
-        self.camera.azimuth = float(interpolate(128.0, 118.0, progress))
-        self.camera.elevation = float(interpolate(-16.0, -14.0, progress))
+        self._follow_camera_target(
+            target,
+            float(interpolate(4.45, 4.1, progress)),
+            float(interpolate(128.0, 118.0, progress)),
+            float(interpolate(-16.0, -14.0, progress)),
+        )
 
     def _set_outro_camera(self, elapsed: float, duration: float):
         pelvis, ball, goal = self._scene_points()
         progress = smoothstep(elapsed / max(duration, 1e-6))
         target = 0.48 * pelvis + 0.34 * ball + 0.18 * goal
         target[2] = 0.62
-        self.camera.lookat[:] = target
-        self.camera.distance = float(interpolate(4.1, 4.8, progress))
-        self.camera.azimuth = float(interpolate(118.0, 28.0, progress))
-        self.camera.elevation = float(interpolate(-14.0, -22.0, progress))
+        self._follow_camera_target(
+            target,
+            float(interpolate(4.1, 4.8, progress)),
+            float(interpolate(118.0, 28.0, progress)),
+            float(interpolate(-14.0, -22.0, progress)),
+        )
 
     def _render(self):
         self.renderer.update_scene(

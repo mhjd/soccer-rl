@@ -1,0 +1,7 @@
+Asset: showcase_ball_uv.png
+Source: https://opengameart.org/content/soccer-ball-animation-sprites-and-3d-texture
+Author: Mustitz
+License: CC0 1.0 Universal
+
+The source texture was resized and its RGB color mode normalized for the
+MuJoCo showcase scene.
