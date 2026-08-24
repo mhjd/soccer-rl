@@ -290,7 +290,7 @@ setup-g1-locomotion:
 		-r requirements-locomotion.txt
 
 download-g1-locomotion-policy:
-	$(PYTHON) -m scripts.download_g1_locomotion_policy
+	$(LOCOMOTION_PYTHON) -m scripts.download_g1_locomotion_policy
 
 check-g1-locomotion:
 	$(LOCOMOTION_PYTHON) -m scripts.evaluate_3d_g1_locomotion --suite

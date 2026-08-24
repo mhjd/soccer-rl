@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 70 1280 280" role="img" aria-labelledby="title description">
+  <title id="title">Hierarchical control architecture for G1 soccer</title>
+  <desc id="description">A task observation enters a trained high-level soccer policy. Its velocity command enters a frozen locomotion policy, which outputs 29 joint targets. A fixed proportional-derivative controller converts the targets to torques, and MuJoCo advances the simulator. A state-feedback loop closes the control stack.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111111"/>
+    </marker>
+    <style>
+      text {
+        fill: #111111;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+      .block {
+        fill: #ffffff;
+        stroke: #111111;
+        stroke-width: 1.6;
+      }
+      .trained {
+        fill: #eeeeee;
+        stroke-width: 2.4;
+      }
+      .flow {
+        fill: none;
+        stroke: #111111;
+        stroke-width: 1.7;
+        marker-end: url(#arrow);
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .detail {
+        font-size: 15px;
+      }
+      .status {
+        font-size: 14px;
+        font-style: italic;
+      }
+      .signal {
+        font-size: 13px;
+        text-anchor: middle;
+      }
+    </style>
+  </defs>
+
+  <rect width="1280" height="380" fill="#ffffff"/>
+
+  <g id="observation">
+    <text x="20" y="182" class="title">Task observation</text>
+  </g>
+
+  <path id="observation-flow" d="M 194 176 H 204" class="flow"/>
+
+  <g id="high-level-policy">
+    <rect x="216" y="112" width="205" height="128" class="block trained"/>
+    <text x="318.5" y="147" class="title" text-anchor="middle">High-level policy</text>
+    <text x="318.5" y="174" class="detail" text-anchor="middle">PPO or SAC</text>
+    <text x="318.5" y="201" class="status" text-anchor="middle">trained</text>
+    <text x="318.5" y="225" class="detail" text-anchor="middle">10 action updates/s</text>
+  </g>
+
+  <path id="command-flow" d="M 421 176 H 538" class="flow"/>
+  <text x="479.5" y="153" class="signal">velocity command</text>
+
+  <g id="locomotion-policy">
+    <rect x="550" y="112" width="205" height="128" class="block"/>
+    <text x="652.5" y="147" class="title" text-anchor="middle">Locomotion policy</text>
+    <text x="652.5" y="174" class="detail" text-anchor="middle">pretrained G1 policy</text>
+    <text x="652.5" y="201" class="status" text-anchor="middle">frozen</text>
+    <text x="652.5" y="225" class="detail" text-anchor="middle">50 target updates/s</text>
+  </g>
+
+  <path id="joint-target-flow" d="M 755 176 H 856" class="flow"/>
+  <text x="805.5" y="153" class="signal">29 joint targets</text>
+
+  <g id="pd-controller">
+    <rect x="868" y="112" width="160" height="128" class="block"/>
+    <text x="948" y="147" class="title" text-anchor="middle">Joint controller</text>
+    <text x="948" y="174" class="detail" text-anchor="middle">PD control</text>
+    <text x="948" y="201" class="status" text-anchor="middle">fixed gains</text>
+    <text x="948" y="225" class="detail" font-size="14" text-anchor="middle">500 torque updates/s</text>
+  </g>
+
+  <path id="torque-flow" d="M 1028 176 H 1090" class="flow"/>
+  <text x="1059" y="141" class="signal">29 joint</text>
+  <text x="1059" y="157" class="signal">torques</text>
+
+  <g id="physics-engine">
+    <rect x="1102" y="112" width="168" height="128" class="block"/>
+    <text x="1186" y="147" class="title" text-anchor="middle">Physics simulator</text>
+    <text x="1186" y="174" class="detail" text-anchor="middle">MuJoCo</text>
+    <text x="1186" y="201" class="status" text-anchor="middle">fixed model</text>
+    <text x="1186" y="225" class="detail" font-size="14" text-anchor="middle">500 physics updates/s</text>
+  </g>
+
+  <path id="state-feedback" d="M 1186 240 V 316 H 105 V 194" class="flow"/>
+  <rect x="585" y="299" width="120" height="34" fill="#ffffff"/>
+  <text x="645" y="320" class="signal">state feedback</text>
+</svg>

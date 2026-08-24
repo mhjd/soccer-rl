@@ -9,12 +9,7 @@ allowed reward and curriculum designs to be tested before adding humanoid
 locomotion. This README documents the experiments conducted so far, including
 approaches that did not improve performance.
 
-> **Work in progress.** Current G1 results use one training seed, so comparisons
-> between learning algorithms remain preliminary.
-
-## Current demonstration
-
-https://github.com/user-attachments/assets/3235febc-3b9e-4fca-87e5-4f55b680d67c
+https://github.com/user-attachments/assets/4939c91c-5118-42a9-a70c-d8ac4bae42fd
 
 The video shows the current G1 controller scoring from one fixed initial state.
 
@@ -23,8 +18,7 @@ The video shows the current G1 controller scoring from one fixed initial state.
 The G1 uses hierarchical control. A high-level soccer policy chooses the
 desired forward velocity, lateral velocity, and turning rate. A pretrained
 low-level locomotion policy converts this command into coordinated targets for
-the robot's joints. Only the high-level policy is trained in the current soccer
-experiments.
+the robot's joints. The main experiments train only the high-level policy.
 
 The low-level policy comes from
 [Unitree RL Lab](https://github.com/unitreerobotics/unitree_rl_lab). The robot
@@ -35,95 +29,119 @@ external components are fixed to specific revisions for reproducibility.
 The experiments compare Proximal Policy Optimization (PPO) and Soft
 Actor-Critic (SAC) for the high-level policy.
 
-A proportional-derivative controller converts joint-target errors into
-actuator torques. MuJoCo then simulates the resulting motion and contacts.
+![Hierarchical G1 control stack](media/g1-control-stack.svg)
 
-```text
-high-level PPO or SAC policy (10 Hz)
-    observation: robot-relative task and contact state
-    action: desired forward velocity, lateral velocity, and turning rate
-                         |
-                         v
-pretrained G1 locomotion policy (50 Hz)
-    output: 29 joint-position targets
-                         |
-                         v
-proportional-derivative controller -> 29 actuators -> MuJoCo physics (500 Hz)
-```
+*Figure 1. Hierarchical G1 control architecture.*
 
-This hierarchy isolates the question *where should the robot move?* from the
-lower-level problem *how should its joints produce that motion?* The high-level
-policy currently receives simulator state rather than camera observations.
-
-### The geometric reference
-
-The learned policies are compared with a deterministic controller that reads
-the same task geometry. It computes an approach point behind the ball. If the
-ball blocks the direct route to that point, it first walks to a lateral detour.
-Once positioned, it aligns with the goal and walks through the ball.
-
-![Direct and detour paths used by the geometric controller](media/geometric-controller.svg)
-
-This controller does not learn. It is a useful reference because it separates
-two causes of failure. If the geometric controller succeeds and a policy
-fails, the locomotion stack can execute the maneuver and the remaining problem
-is high-level control. Its performance does not constitute evidence of learned
-generalization because the route was designed by hand.
-
-## Research progression
-
-| Observation | Hypothesis tested | Result | Decision |
-| --- | --- | --- | --- |
-| Goal rewards were rare in the randomized cylinder task. | Intermediate rewards or progressively harder starting positions might make the task learnable. | Both methods learned. Intermediate rewards alone varied much more across seeds, while combining both methods had the highest final mean. | Use progressive randomization to expand difficulty, then test rewards separately. |
-| A fixed G1 start worked, but recovery starts exposed hesitation and poor reorientation. | Additional intermediate rewards or longer episodes might teach recovery. | Several reward variants changed behavior without reliably solving the hard cases. | Build a deterministic geometric controller to test whether the locomotion stack could execute the missing maneuvers. |
-| The geometric controller solved many starts that the learned policy missed. | The main limit was high-level control rather than the pretrained locomotion policy. | The robot could approach, reorient, and score from the same simulator states. | Use geometric control as a diagnostic reference and broaden the learned policy's training distribution. |
-| Some goals depended on which foot was moving forward, and the baseline occasionally fell during contact. | A learned correction to the leg targets might improve the kick. | Falls dropped from 22 to 0 on 404 paired cases, but goals changed only from 222 to 225. | Record the stability gain; the result does not support a claim of improved kicking performance. |
-| SAC performed well when the robot started behind the ball but failed when its position and orientation varied more widely. | The policy had learned the original range of starting positions rather than general movement around the ball. | Training on progressively broader starts improved the held-out benchmark, but still trailed the hand-written controller. | Continue expanding difficulty and test on larger arenas and unseen starting poses. |
+The high-level policy currently receives task features computed from simulator
+state rather than camera observations.
 
 ## Experiments and preliminary results
 
-### 1. Curriculum learning and reward shaping on the 3D cylinder
+### 1. Curriculum learning on the 3D cylinder
 
-The first controlled experiment asked whether PPO could learn the randomized
-task from a sparse goal reward when paired with an adaptive curriculum, and
-whether contact-phased shaping improved learning.
+Before training the G1, I replaced the humanoid with a cylinder controlled by
+two horizontal velocity commands. This isolated curriculum and reward design
+from humanoid locomotion.
 
-The sparse reward provides feedback only after a goal. The adaptive curriculum
-expands the range of starting positions as the policy improves.
-Contact-phased shaping gives intermediate rewards for approaching the ball
-before contact, then for moving the ball toward the goal.
+![Cylinder soccer environment](media/cylinder-environment.png)
 
-**Protocol.** PPO, 200,000 training interactions, three training seeds, and 100
-held-out evaluation episodes every 10,000 interactions. Every strategy is
-evaluated on the same final start-state distribution.
+*Figure 2. The blue cylinder replaces the humanoid while keeping the ball,
+arena, and scoring objective.*
 
-| Training strategy | Mean goal success at 200k | Standard deviation |
-| --- | ---: | ---: |
-| Adaptive curriculum, sparse goal reward | 86.7% | 0.9 percentage points |
-| Contact-phased shaping, no curriculum | 85.0% | 9.4 percentage points |
-| Adaptive curriculum + contact-phased shaping | **90.0%** | 2.2 percentage points |
+The environment uses a simple form of Automatic Curriculum Learning. One
+difficulty value controls the range of initial positions, from a fixed easy
+configuration to the complete target distribution. Success increases the
+difficulty slightly, while failure reduces it. Progression therefore follows
+the policy's performance instead of a predetermined training schedule.
 
-![Cylinder learning curves](media/cylinder-learning-curves.png)
+Across three training seeds, contact-phased reward shaping increased final mean
+success from 86.7% to 90.0%, while the standard deviation rose from 0.9 to 2.2
+percentage points. The gain was small and more variable across seeds.
 
-Lines show the mean across three training seeds. Shaded bands show one
-standard deviation.
+Reward shaping could bias the policy toward a hand-designed strategy that may
+not suit new situations. Given its limited and less reliable gain, I preferred
+to avoid it unless later experiments showed that it was necessary.
 
-**Interpretation.** A curriculum was sufficient to learn from the sparse goal
-signal, so dense shaping was not strictly necessary. Contact-phased shaping
-could learn quickly, but was much more sensitive to the training seed. The
-combined strategy achieved the highest final mean in this small experiment,
-although three seeds are not enough for a definitive ranking.
+### 2. From fixed-start PPO to recovery failures
 
-### 2. PPO, SAC, and sparse-reward ablation on G1
+The first G1 policy trained from one fixed initial state. PPO scored in all 10
+deterministic evaluation episodes, with no falls. This established that the
+hierarchical control stack worked, but said little about the policy beyond that
+single configuration.
 
-The first G1 benchmark uses randomized starts that always place the robot
-behind the ball. This is the distribution used to train the three policies.
-The sparse variant receives a task reward only after scoring. Approach-progress
-shaping also rewards movement toward the ball and the goal.
+![Fixed-start PPO goal](media/g1-fixed-start-ppo.gif)
 
-**Protocol.** One training seed per policy, about 200,000 training interactions,
-and 1,000 shared evaluation starts. Episodes last at most 200 high-level steps.
-The wall-safety layer used in the demonstration is disabled during evaluation.
+*Figure 3. One of the ten deterministic fixed-start evaluations.*
+
+I next randomized the robot and ball while always keeping the G1 behind the
+ball relative to the goal. The fixed-start checkpoint scored in 36 of 100
+episodes from this distribution. After another 200,704 interactions with an
+adaptive curriculum, it reached 54 of 100.
+
+![Two randomized PPO evaluations](media/g1-randomized-ppo-examples.gif)
+
+*Figure 4. Two consecutive evaluations of the curriculum-trained PPO
+checkpoint.*
+
+Although randomized, these starts remained favorable: the G1 always began
+behind the ball, already on the correct side to score. I therefore made the
+task harder by introducing recovery starts. They placed the G1 beside the
+ball, and sometimes slightly ahead of it, so the robot first had to recover a
+position behind the ball before attacking the goal.
+
+The best PPO version at this stage scored in 189 of 500 maximum-difficulty
+episodes, or 37.8%. Some failures looked readily solvable: the robot backed
+away from the ball but then hesitated instead of completing its reorientation
+and approaching again.
+
+### 3. Testing physical feasibility with a geometric controller
+
+Those failures had three plausible causes. The high-level PPO policy might be
+choosing poor commands. The frozen locomotion policy might be unable to execute
+the required recovery movement. The movement itself might be physically
+impractical for the simulated G1.
+
+To identify the source of the failures, I kept the G1 and locomotion policy
+unchanged, replacing PPO's learned command selection with hand-written
+geometric rules.
+
+Rather than designing and testing geometric rules manually, I used a coding
+agent to automate this trial-and-error process. It piloted the G1 from simulator
+state, diagnosed failed attempts, replayed ambiguous cases, and revised a
+deliberately small rule set.
+
+The resulting controller computes an approach point behind the ball, aligns
+the G1 with the goal, and walks through the ball. If the ball blocks the direct
+path, it adds one lateral detour. It recalculates its commands from the current
+state at every step.
+
+![The PPO policy fails while the geometric controller scores from the same recovery start](media/ppo-vs-geometric-recovery-labeled.gif)
+
+*Figure 5. Paired recovery evaluation.*
+
+The first paired diagnostic selected ten starts on which PPO failed. The
+geometric controller scored on all ten without falling, which showed that
+those recovery movements were executable through the existing locomotion
+stack.
+
+The initial geometric rules scored only 32/100 on broader starts. After the
+automated experiment loop improved alignment and added one detour rule, the
+controller exceeded 90% on newly sampled episodes. This showed that a small set
+of geometric rules could generalize across this class of recovery problems.
+
+### 4. Learning alternatives
+
+I first tested whether learning closer to the actuators could improve contact
+with the ball. A PPO residual policy adjusted the 12 leg-joint targets produced
+by the frozen locomotion policy. On 404 difficult contact cases, the baseline
+scored 222 goals and fell 22 times. The residual scored 225 and never fell. It
+improved stability, but not scoring or speed, so it did not solve the
+high-level recovery problem.
+
+I then compared PPO and SAC at the high level. Each learned policy used one
+training seed and about 200,000 interactions. The evaluation used the same
+1,000 behind-ball starts and a 200-step limit for every controller.
 
 | Controller | Training reward | Goal success | Falls | Mean steps to goal |
 | --- | --- | ---: | ---: | ---: |
@@ -132,28 +150,27 @@ The wall-safety layer used in the demonstration is disabled during evaluation.
 | SAC | Sparse goal only | **986/1000 (98.6%)** | 0.1% | **34.9** |
 | Geometric controller | No training | 962/1000 (96.2%) | **0.0%** | 58.0 |
 
-The demonstration uses the sparse SAC checkpoint, with the wall-safety layer
-enabled only for filming.
+SAC outperformed PPO in this run. Removing the approach-progress reward from
+SAC changed success by only 0.2 percentage points, so SAC did not need the
+hand-designed shaping strategy on this distribution. I retained the sparse SAC
+policy for the next experiment. The current demonstration uses this checkpoint.
 
-**Interpretation.** In this run, SAC did not need the approach-progress reward
-on this distribution. Removing it changed success by only 0.2 percentage
-points and slightly reduced the successful episode length. PPO scored less
-often in this run, but one training seed is not enough to conclude that SAC is
-generally the better algorithm. The geometric controller was reliable but
-slower because it uses separate approach, alignment, and drive-through phases.
+### 5. Broad generalization
 
-### 3. Generalization to broad G1 initial poses
+High success on familiar starts did not show whether the learned policy could
+handle different geometry. Earlier evaluations constrained the G1 to start
+behind the ball, on the side opposite the goal. The broad test removes this
+constraint, sampling the G1 and ball independently across the arena, with the
+robot initially facing any direction. Sparse SAC fell from 98.6% on familiar
+starts to 33.2% on 1,000 broad starts. More than half of these failures ended
+with the robot stalled.
 
-The broad distribution moves both the robot and ball across the arena and
-samples the robot's initial heading over the full circle. This includes recovery
-and reorientation problems that are absent from the original behind-ball
-training distribution.
+I continued training the same policy for 250,000 interactions with an adaptive
+broad curriculum. The curriculum expanded the position and heading ranges as
+the policy succeeded, instead of switching directly to the final distribution.
 
-**Protocol.** The same 1,000 broad starts for every controller, with a 500-step
-episode limit and no wall-safety layer. The simple SAC policy trained for
-200,000 interactions on behind-ball starts. The broad-curriculum policy then
-continued training for 250,000 interactions while the start distribution
-expanded. The geometric controller received no training.
+The final comparison uses the same 1,000 broad starts, a 500-step limit, and no
+wall-safety layer.
 
 | Controller | Training distribution | Goal success | Falls | Mean steps to goal | Stalled failures |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -161,44 +178,11 @@ expanded. The geometric controller received no training.
 | Sparse SAC | Broad curriculum | 736/1000 (73.6%) | 1.2% | **122.3** | 211 |
 | Geometric controller | No training | **910/1000 (91.0%)** | **0.1%** | 162.3 | **0** |
 
-A stalled failure is an unsuccessful episode in which the robot moves less
-than 0.2 m and averages below 0.08 m/s over the final 30 high-level steps.
-
-**Interpretation.** The 65.4-point drop between the familiar and broad
-benchmarks exposed a generalization problem that the first benchmark hid.
-Broad curriculum training recovered 40.4 points, so much of the failure came
-from the training distribution rather than an absolute locomotion limit. It
-still left a 17.4-point gap to the hand-written reference. This comparison does
-not isolate curriculum design from training time because the curriculum policy
-received 250,000 additional training interactions.
-
-### 4. Low-level kick residual
-
-The final experiment trained a PPO residual policy to adjust the 12 leg-joint
-targets produced by the pretrained locomotion policy. It was tested against
-unchanged locomotion commands on 404 difficult cases. These cases varied the
-phase of the walking cycle, the contact distance, and the lateral offset.
-
-| Controller | Goals | Falls | Mean steps to goal |
-| --- | ---: | ---: | ---: |
-| Pretrained locomotion, zero residual | 222/404 (55.0%) | 22 | 157.6 |
-| Learned low-level residual | 225/404 (55.7%) | **0** | 157.8 |
-
-**Interpretation.** The residual eliminated falls on this challenge set, but
-did not materially improve scoring or speed. In paired outcomes it fixed 40
-baseline failures while causing 37 baseline successes to fail. This is
-evidence of a stability benefit, not yet of a better kick controller.
-
-## Current findings
-
-- Adaptive task difficulty made the sparse goal reward learnable without
-  encoding the route in a shaping function.
-- The geometric controller separates locomotion limits from failures in the
-  learned high-level policy.
-- Broader initial-state distributions expose recovery and reorientation as the
-  current high-level bottlenecks.
-- Adding a learned residual at a lower control level does not automatically
-  improve the task objective; isolated, paired evaluations are necessary.
+The broad curriculum recovered 40.4 percentage points and reduced stalled
+failures from 532 to 211. The learned policy also reached the goal faster than
+the geometric controller when it succeeded. It remains 17.4 points behind the
+geometric reference, and it received more total training interactions than the
+behind-ball checkpoint.
 
 ## Limitations
 
@@ -207,9 +191,7 @@ evidence of a stability benefit, not yet of a better kick controller.
   simulator instead of estimating them from camera images.
 - The locomotion policy is pretrained and frozen, so this is not end-to-end
   humanoid learning.
-- The arena and initial-state distributions are still limited relative to a
-  general football task.
-- All results are simulation-only.
+- The task still uses one small arena, one goal, and no opponents.
 
 Planned experiments will repeat the G1 comparisons across training seeds,
 enlarge the arena and held-out pose distributions, and test whether a broader
@@ -218,8 +200,7 @@ dense reward shaping.
 
 ## Reproducing the current G1 setup
 
-The G1 stack uses Python 3.11 and the `uv` package manager for its isolated
-environment:
+The G1 stack requires Python 3.11, `uv`, and `make`. From the project root:
 
 ```sh
 make setup-g1-locomotion
@@ -227,11 +208,8 @@ make download-g1-locomotion-policy
 make check-g1-soccer-env
 ```
 
-The downloaded locomotion model is pinned by revision and SHA-256 checksum.
-High-level checkpoints under `models/` are intentionally ignored; they can be
-regenerated with the training targets in the `Makefile`.
-
-For example, the current sparse-reward SAC progression is:
+High-level checkpoints under `models/` are intentionally ignored. The current
+sparse-reward SAC progression can be regenerated with:
 
 ```sh
 make train-g1-soccer-sac-goal-only SEED=0 TIMESTEPS=200000
