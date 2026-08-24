@@ -8,6 +8,7 @@ EPISODE ?= 0
 ALGORITHM ?= sac
 TIMESTEPS ?= 200000
 EPISODES ?= 100
+COMPARISON_EPISODES ?= 10
 REWARD_MODE ?= approach_progress
 MODEL_LABEL ?= benchmark
 
@@ -53,6 +54,7 @@ MODEL_LABEL ?= benchmark
 	train-g1-soccer-executable-commands \
 	evaluate-g1-soccer-executable-commands \
 	inspect-g1-policy-vs-geometric \
+	inspect-g1-controller-comparison \
 	evaluate-g1-geometric-broad \
 	inspect-g1-geometric-broad \
 	check-g1-kick-residual \
@@ -122,6 +124,7 @@ help:
 	@echo "  make train-g1-soccer-executable-commands          Train with executable walking commands"
 	@echo "  make evaluate-g1-soccer-executable-commands       Render the executable-command policy"
 	@echo "  make inspect-g1-policy-vs-geometric               Compare ten failed PPO starts side by side"
+	@echo "  make inspect-g1-controller-comparison             Compare PPO, SAC, and geometric control side by side"
 	@echo "  make evaluate-g1-geometric-broad                  Measure broad geometric-controller generalization"
 	@echo "  make inspect-g1-geometric-broad EPISODE=N          Render one reproducible broad test case"
 	@echo "  make check-g1-kick-residual                       Check the low-level residual interface"
@@ -491,6 +494,13 @@ inspect-g1-policy-vs-geometric:
 		--episodes 100 \
 		--failed-episodes 10 \
 		--render-failures \
+		--playback-speed 2
+
+inspect-g1-controller-comparison:
+	$(LOCOMOTION_PYTHON) \
+		-m scripts.inspect_3d_g1_controller_comparison \
+		--seed 100000 \
+		--episodes $(COMPARISON_EPISODES) \
 		--playback-speed 2
 
 evaluate-g1-geometric-broad:
