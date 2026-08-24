@@ -1,5 +1,6 @@
 import argparse
 
+import mujoco
 import numpy as np
 from gymnasium.utils.env_checker import check_env
 
@@ -21,8 +22,24 @@ from src.soccer_3d.g1_soccer_env import (
     RANDOM_BALL_XY_LOW,
     RECOVERY_G1_LATERAL_DISTANCE,
     RECOVERY_G1_X_OFFSET,
+    SCENE_PATH,
     G1SoccerEnv,
     normalized_action_to_command,
+)
+
+SHOWCASE_SCENE_PATH = SCENE_PATH.with_name("showcase_scene.xml")
+SHOWCASE_PHYSICAL_GEOMS = (
+    "floor",
+    "arena_back_wall",
+    "arena_left_wall",
+    "arena_right_wall",
+    "arena_goal_wall_left",
+    "arena_goal_wall_right",
+    "ball_geom",
+    "goal_left_post",
+    "goal_right_post",
+    "goal_crossbar",
+    "goal_back",
 )
 
 
@@ -122,6 +139,84 @@ def check_command_governor():
             raise RuntimeError("Wall projection exceeded the training range")
     finally:
         wall_env.close()
+
+
+def check_showcase_physics_matches_training_scene():
+    training_model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
+    showcase_model = mujoco.MjModel.from_xml_path(str(SHOWCASE_SCENE_PATH))
+    if (
+        training_model.nq,
+        training_model.nv,
+        training_model.nu,
+        training_model.opt.timestep,
+    ) != (
+        showcase_model.nq,
+        showcase_model.nv,
+        showcase_model.nu,
+        showcase_model.opt.timestep,
+    ):
+        raise RuntimeError("Showcase changed the robot or simulation timing")
+
+    for geom_name in SHOWCASE_PHYSICAL_GEOMS:
+        training_id = mujoco.mj_name2id(
+            training_model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            geom_name,
+        )
+        showcase_id = mujoco.mj_name2id(
+            showcase_model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            geom_name,
+        )
+        scalar_fields = (
+            "geom_type",
+            "geom_bodyid",
+            "geom_contype",
+            "geom_conaffinity",
+            "geom_condim",
+        )
+        vector_fields = (
+            "geom_pos",
+            "geom_quat",
+            "geom_size",
+            "geom_friction",
+        )
+        for field_name in scalar_fields:
+            if getattr(training_model, field_name)[training_id] != getattr(
+                showcase_model,
+                field_name,
+            )[showcase_id]:
+                raise RuntimeError(
+                    f"Showcase changed {geom_name}.{field_name}"
+                )
+        for field_name in vector_fields:
+            if not np.allclose(
+                getattr(training_model, field_name)[training_id],
+                getattr(showcase_model, field_name)[showcase_id],
+            ):
+                raise RuntimeError(
+                    f"Showcase changed {geom_name}.{field_name}"
+                )
+
+    for body_name in ("pelvis", "ball"):
+        training_id = mujoco.mj_name2id(
+            training_model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            body_name,
+        )
+        showcase_id = mujoco.mj_name2id(
+            showcase_model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            body_name,
+        )
+        if not np.isclose(
+            training_model.body_mass[training_id],
+            showcase_model.body_mass[showcase_id],
+        ) or not np.allclose(
+            training_model.body_inertia[training_id],
+            showcase_model.body_inertia[showcase_id],
+        ):
+            raise RuntimeError(f"Showcase changed {body_name} dynamics")
 
 
 def check_gymnasium_contract():
@@ -416,6 +511,7 @@ def main():
     args = parse_args()
     check_action_mapping()
     check_command_governor()
+    check_showcase_physics_matches_training_scene()
     check_gymnasium_contract()
     check_control_timestep()
     check_truncation()

@@ -56,6 +56,7 @@ COMMAND_GOVERNOR ?= none
 	evaluate-g1-soccer-executable-commands \
 	inspect-g1-policy-vs-geometric \
 	inspect-g1-controller-comparison \
+	render-g1-showcase \
 	evaluate-g1-geometric-broad \
 	inspect-g1-geometric-broad \
 	check-g1-kick-residual \
@@ -126,6 +127,7 @@ help:
 	@echo "  make evaluate-g1-soccer-executable-commands       Render the executable-command policy"
 	@echo "  make inspect-g1-policy-vs-geometric               Compare ten failed PPO starts side by side"
 	@echo "  make inspect-g1-controller-comparison             Compare PPO, SAC, and geometric control side by side"
+	@echo "  make render-g1-showcase                           Export the cinematic G1 soccer portfolio video"
 	@echo "  make evaluate-g1-geometric-broad                  Measure broad geometric-controller generalization"
 	@echo "  make inspect-g1-geometric-broad EPISODE=N          Render one reproducible broad test case"
 	@echo "  make check-g1-kick-residual                       Check the low-level residual interface"
@@ -504,6 +506,9 @@ inspect-g1-controller-comparison:
 		--seed 100000 \
 		--episodes $(COMPARISON_EPISODES) \
 		--playback-speed 2
+
+render-g1-showcase:
+	$(LOCOMOTION_MJ_PYTHON) -m scripts.render_3d_g1_showcase
 
 evaluate-g1-geometric-broad:
 	$(LOCOMOTION_PYTHON) \

@@ -105,6 +105,7 @@ class G1SoccerEnv(gym.Env):
     def __init__(
         self,
         policy_path: Path = DEFAULT_POLICY_PATH,
+        scene_path: Path = SCENE_PATH,
         max_episode_steps: int = MAX_EPISODE_STEPS,
         render_mode: str | None = None,
         randomize_initial_positions: bool = False,
@@ -132,8 +133,11 @@ class G1SoccerEnv(gym.Env):
                 f"Missing locomotion policy {policy_path}; run "
                 "`make download-g1-locomotion-policy` first"
             )
+        scene_path = Path(scene_path)
+        if not scene_path.exists():
+            raise FileNotFoundError(f"Missing G1 soccer scene {scene_path}")
 
-        self.model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
+        self.model = mujoco.MjModel.from_xml_path(str(scene_path))
         self.data = mujoco.MjData(self.model)
         self.controller = G1LocomotionController(self.model, policy_path)
         self.max_episode_steps = max_episode_steps
@@ -233,6 +237,7 @@ class G1SoccerEnv(gym.Env):
         self._last_human_render_time = None
         self._last_command = np.zeros(3, dtype=np.float32)
         self._leg_joint_residual_provider = None
+        self._physics_step_callback = None
 
     def _name_id(self, object_type, name: str) -> int:
         object_id = mujoco.mj_name2id(self.model, object_type, name)
@@ -523,6 +528,8 @@ class G1SoccerEnv(gym.Env):
                 self._ball_contact_occurred = True
             goal = self._ball_has_scored()
             fell = self._g1_has_fallen()
+            if self._physics_step_callback is not None:
+                self._physics_step_callback()
             if goal or fell:
                 break
         return goal, fell
@@ -532,10 +539,16 @@ class G1SoccerEnv(gym.Env):
             raise TypeError("Residual provider must be callable or None")
         self._leg_joint_residual_provider = provider
 
+    def set_physics_step_callback(self, callback):
+        if callback is not None and not callable(callback):
+            raise TypeError("Physics-step callback must be callable or None")
+        self._physics_step_callback = callback
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         options = {} if options is None else dict(options)
         self.set_leg_joint_residual_provider(None)
+        self.set_physics_step_callback(None)
 
         reset_g1_for_locomotion(self.model, self.data, self.controller)
         difficulty = options.get("initial_state_difficulty")
