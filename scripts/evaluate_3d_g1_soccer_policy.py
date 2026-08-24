@@ -10,10 +10,13 @@ from scripts.evaluate_3d_g1_geometric_controller import (
     PilotTools,
     initial_episode_info,
 )
-from src.soccer_3d import G1SoccerEnv
+from src.soccer_3d import G1CommandGovernorEnv, G1SoccerEnv
 from src.soccer_3d.g1_broad_pose import sample_broad_pose
+from src.soccer_3d.g1_command_governor_env import (
+    COMMAND_GOVERNOR_MODES,
+    DEFAULT_WALL_MARGIN,
+)
 from src.soccer_3d.g1_soccer_env import MAX_EPISODE_STEPS, OBSERVATION_MODES
-
 
 DEFAULT_MODEL_PATH = Path("models/ppo_3d_g1_soccer_fixed.zip")
 ALGORITHM_CLASSES = {"ppo": PPO, "sac": SAC}
@@ -65,6 +68,16 @@ def parse_args():
         default=MAX_EPISODE_STEPS,
     )
     parser.add_argument(
+        "--command-governor",
+        choices=("none", *COMMAND_GOVERNOR_MODES),
+        default="none",
+    )
+    parser.add_argument(
+        "--wall-margin",
+        type=float,
+        default=DEFAULT_WALL_MARGIN,
+    )
+    parser.add_argument(
         "--render",
         action="store_true",
         help="Render episodes in a MuJoCo window.",
@@ -77,6 +90,10 @@ def parse_args():
     if args.algorithm == "geometric":
         if args.model is not None:
             parser.error("--model is not used by the geometric controller")
+        if args.command_governor != "none":
+            parser.error(
+                "--command-governor only applies to learned policies"
+            )
     else:
         if args.model is None:
             args.model = DEFAULT_MODEL_PATH
@@ -92,6 +109,8 @@ def parse_args():
         parser.error("--recovery-state-difficulty must be in [0, 1]")
     if args.max_episode_steps <= 0:
         parser.error("--max-episode-steps must be positive")
+    if args.wall_margin < 0.0:
+        parser.error("--wall-margin cannot be negative")
     return args
 
 
@@ -108,14 +127,29 @@ def evaluate(
     recovery_state_difficulty: float,
     max_episode_steps: int,
     observation_mode: str,
+    command_governor: str = "none",
+    wall_margin: float = DEFAULT_WALL_MARGIN,
     progress_every: int = 0,
 ) -> dict[str, float | int]:
-    env = G1SoccerEnv(
+    env_class = (
+        G1SoccerEnv
+        if command_governor == "none"
+        else G1CommandGovernorEnv
+    )
+    governor_kwargs = (
+        {}
+        if command_governor == "none"
+        else {
+            "wall_margin": wall_margin,
+        }
+    )
+    env = env_class(
         render_mode="human" if render else None,
         randomize_initial_positions=randomize_initial_positions,
         recovery_start_probability=recovery_start_probability,
         max_episode_steps=max_episode_steps,
         observation_mode=observation_mode,
+        **governor_kwargs,
     )
     episode_rewards = []
     episode_lengths = []
@@ -269,10 +303,13 @@ def main():
         recovery_state_difficulty=args.recovery_state_difficulty,
         max_episode_steps=args.max_episode_steps,
         observation_mode=args.observation_mode,
+        command_governor=args.command_governor,
+        wall_margin=args.wall_margin,
         progress_every=args.progress_every,
     )
 
     print(f"Controller: {args.algorithm.upper()}")
+    print(f"Command governor: {args.command_governor}")
     print(f"Goals: {results['goals']}/{args.episodes}")
     print(f"Success rate: {results['success_rate']:.1%}")
     print(f"Falls: {results['falls']}/{args.episodes}")

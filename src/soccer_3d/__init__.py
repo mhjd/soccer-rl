@@ -5,8 +5,9 @@ __all__ = [
     "CylinderSoccerEnv",
     "G1AdaptiveBroadCurriculum",
     "G1AdaptiveStartCurriculum",
-    "G1HighLevelKickResidualEnv",
+    "G1CommandGovernorEnv",
     "G1GeometricResidualEnv",
+    "G1HighLevelKickResidualEnv",
     "G1KickResidualEnv",
     "G1SoccerEnv",
 ]
@@ -26,6 +27,10 @@ def __getattr__(name):
         from .g1_soccer_env import G1SoccerEnv
 
         return G1SoccerEnv
+    if name == "G1CommandGovernorEnv":
+        from .g1_command_governor_env import G1CommandGovernorEnv
+
+        return G1CommandGovernorEnv
     if name == "G1KickResidualEnv":
         from .g1_kick_residual_env import G1KickResidualEnv
 

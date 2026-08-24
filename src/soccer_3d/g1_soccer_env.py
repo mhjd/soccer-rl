@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import time
+from pathlib import Path
 
 import gymnasium as gym
-from gymnasium import spaces
 import mujoco
 import numpy as np
+from gymnasium import spaces
 
 from src.soccer_3d.g1_locomotion import (
     COMMAND_HIGH,
@@ -15,7 +15,6 @@ from src.soccer_3d.g1_locomotion import (
     G1LocomotionController,
     reset_g1_for_locomotion,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCENE_PATH = Path(__file__).parent / "assets" / "g1" / "soccer_scene.xml"
@@ -351,6 +350,10 @@ class G1SoccerEnv(gym.Env):
         ball_goal_distance = np.linalg.norm(goal_xy - ball_xy)
         return float(approach_distance), float(ball_goal_distance)
 
+    def _action_to_command(self, action: np.ndarray) -> np.ndarray:
+        """Convert one high-level action into an executed command."""
+        return normalized_action_to_command(action)
+
     def _ball_has_scored(self) -> bool:
         ball_position = self.data.xpos[self._ball_body_id]
         goal_position = self.data.site_xpos[self._goal_line_site_id]
@@ -607,7 +610,7 @@ class G1SoccerEnv(gym.Env):
         previous_approach_distance, previous_ball_goal_distance = (
             self._progress_distances()
         )
-        command = normalized_action_to_command(action)
+        command = self._action_to_command(action)
         goal, fell = self._advance_physics(
             command,
             self.physics_steps_per_action,

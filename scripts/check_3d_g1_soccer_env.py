@@ -1,25 +1,28 @@
 import argparse
 
-from gymnasium.utils.env_checker import check_env
 import numpy as np
+from gymnasium.utils.env_checker import check_env
 
+from src.soccer_3d.g1_broad_pose import interpolate_pose
+from src.soccer_3d.g1_command_governor_env import G1CommandGovernorEnv
+from src.soccer_3d.g1_curriculum import (
+    G1AdaptiveBroadCurriculum,
+    G1AdaptiveStartCurriculum,
+)
 from src.soccer_3d.g1_soccer_env import (
+    COMMAND_HIGH,
+    COMMAND_LOW,
     CONTROL_TIMESTEP,
     FIXED_BALL_XY,
     FIXED_G1_XY,
-    G1SoccerEnv,
     MINIMUM_INITIAL_SEPARATION,
     MINIMUM_WALKING_TRANSLATION,
     RANDOM_BALL_XY_HIGH,
     RANDOM_BALL_XY_LOW,
     RECOVERY_G1_LATERAL_DISTANCE,
     RECOVERY_G1_X_OFFSET,
+    G1SoccerEnv,
     normalized_action_to_command,
-)
-from src.soccer_3d.g1_broad_pose import interpolate_pose
-from src.soccer_3d.g1_curriculum import (
-    G1AdaptiveBroadCurriculum,
-    G1AdaptiveStartCurriculum,
 )
 
 
@@ -78,6 +81,47 @@ def check_action_mapping():
         raise RuntimeError("A weak walking action stayed in the dead zone")
     if not np.isclose(walking_command[2], 0.2):
         raise RuntimeError("Walking activation changed the yaw command")
+
+
+def check_command_governor():
+    wall_env = G1CommandGovernorEnv()
+    try:
+        wall_env.reset(
+            seed=0,
+            options={
+                "initial_g1_xy": np.array([1.0, -1.75]),
+                "initial_ball_xy": np.array([1.8, 0.0]),
+                "initial_g1_yaw": 0.0,
+            },
+        )
+        into_wall = wall_env._action_to_command(
+            np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        )
+        away_from_wall = wall_env._action_to_command(
+            np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        )
+        if not np.allclose(into_wall[:2], 0.0, atol=1e-6):
+            raise RuntimeError("Wall projection kept an inward command")
+        if away_from_wall[1] <= 0.0:
+            raise RuntimeError("Wall projection removed an outward command")
+
+        wall_env.reset(
+            seed=1,
+            options={
+                "initial_g1_xy": np.array([1.0, -1.75]),
+                "initial_ball_xy": np.array([1.8, 0.0]),
+                "initial_g1_yaw": np.pi / 4,
+            },
+        )
+        angled_command = wall_env._action_to_command(
+            np.array([-1.0, -1.0, 0.0], dtype=np.float32)
+        )
+        if np.any(angled_command < COMMAND_LOW) or np.any(
+            angled_command > COMMAND_HIGH
+        ):
+            raise RuntimeError("Wall projection exceeded the training range")
+    finally:
+        wall_env.close()
 
 
 def check_gymnasium_contract():
@@ -371,6 +415,7 @@ def check_scripted_goal(render: bool):
 def main():
     args = parse_args()
     check_action_mapping()
+    check_command_governor()
     check_gymnasium_contract()
     check_control_timestep()
     check_truncation()

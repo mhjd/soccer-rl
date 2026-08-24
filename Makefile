@@ -11,6 +11,7 @@ EPISODES ?= 100
 COMPARISON_EPISODES ?= 10
 REWARD_MODE ?= approach_progress
 MODEL_LABEL ?= benchmark
+COMMAND_GOVERNOR ?= none
 
 .PHONY: help install train evaluate \
 	train-cylinder evaluate-cylinder \
@@ -379,6 +380,7 @@ evaluate-g1-soccer-broad-algorithm-benchmark:
 		--seed 100000 \
 		--broad-initial-positions \
 		--observation-mode soccer_state \
+		--command-governor $(COMMAND_GOVERNOR) \
 		--max-episode-steps 500
 
 evaluate-g1-soccer-sac-goal-only-broad:
